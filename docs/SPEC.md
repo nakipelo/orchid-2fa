@@ -186,7 +186,9 @@ interface TwoFactorChannel
 
 **Запасной путь** — если тест этапа 1 не проходит: снимать маршрут Orchid из `RouteCollection` не будем (внутренний API). Вместо этого приложение ставит `platform.auth = false`, а пакет сам регистрирует все маршруты входа Orchid (`routes/auth.php`) под теми же именами и URI, с `POST login` на свой контроллер. Выбор пути фиксируется в этом разделе по итогам этапа 1; при запасном пути меняются шаг установки в README и поведение при `platform.auth = false` (ниже).
 
-**`config('platform.auth') === false`** (основной путь): Orchid свои маршруты входа не регистрирует, пакет тоже не подменяет `POST login` и пишет предупреждение в лог (`warning`, один раз при загрузке). Маршруты экрана кода и профиля регистрируются как обычно.
+**Итог этапа 1: основной путь.** Тесты замещения (`tests/Feature/LoginRouteTest.php`) проходят на Laravel 11, 12 и 13 без кеша и после реального `route:cache` (отдельный процесс `testbench route:cache`, приложение перезагружается из файла кеша); запасной путь не понадобился.
+
+**`config('platform.auth') === false`** (основной путь): Orchid свои маршруты входа не регистрирует, пакет тоже не подменяет `POST login` и в окружениях `local`/`testing` пишет предупреждение в лог (`warning`, один раз при загрузке); в остальных окружениях (в том числе `production`) предупреждения нет — поведение описано в README. Маршруты экрана кода и профиля регистрируются как обычно.
 
 ### 5.4. Middleware
 В v0.1 своего middleware нет. При pending пользователь остаётся гостем, и `Orchid\Platform\Http\Middleware\Access` (группа `platform`) сам отправляет его на `platform.login`. Экран кода без pending редиректит на `platform.login`. Вход в тот же guard мимо `platform.login.auth` (Breeze, Fortify, `orchid/fortify`, свой `/login`) 2FA обходит: в v0.1 только предупреждение в README, middleware «залогинен, но 2FA в этой сессии не пройдена» — кандидат на v0.2 (§1).
@@ -308,7 +310,7 @@ interface TwoFactorChannel
 | Remember-cookie в обход 2FA | Выдаётся только после 2FA; ротация `remember_token` при включении 2FA; `orchid-2fa:rotate-remember-tokens` для cookie, выданных до установки (§4.5) |
 | Выключение 2FA с украденной сессией | Подтверждение кодом на почту; принудительному выключение недоступно, проверка на сервере |
 | Вход мимо Orchid в тот же guard | Вне зоны пакета в v0.1, предупреждение в README; защитный middleware — кандидат на v0.2 |
-| Замещение `POST login` не сработало | Тест этапа 1, в том числе с `route:cache`; запасной путь через `platform.auth = false` (§5.3). При `platform.auth = false` на основном пути — предупреждение в лог |
+| Замещение `POST login` не сработало | Тест этапа 1, в том числе с `route:cache`; запасной путь через `platform.auth = false` (§5.3). При `platform.auth = false` на основном пути — предупреждение в лог в `local`/`testing` |
 | CSRF | Все POST в группе `web`, `@csrf` в формах |
 
 ## 10. Тестирование
@@ -339,7 +341,7 @@ interface TwoFactorChannel
   - параллельные verify;
   - старая remember-cookie после включения 2FA и после `orchid-2fa:rotate-remember-tokens` не пускает;
   - выключение 2FA принудительным пользователем прямым POST отклоняется.
-- **Маршруты (этап 1):** `route('platform.login.auth')` и `POST` на его URI попадают в контроллер пакета без кеша и после `route:cache`; `GET platform.login` остаётся за Orchid; при `platform.auth = false` `POST login` не регистрируется и пишется предупреждение в лог.
+- **Маршруты (этап 1):** `route('platform.login.auth')` и `POST` на его URI попадают в контроллер пакета без кеша и после `route:cache`; `GET platform.login` остаётся за Orchid; при `platform.auth = false` `POST login` не регистрируется, в `testing` пишется предупреждение в лог, в `production` — нет.
 - **Unit-тесты:** маскирование, `CodeStore`, `TwoFactorPolicy`, `TrustedDeviceCookie`, адаптер (включая имя lock-cookie).
 - **Профиль и админка:** включение с ротацией `remember_token`, выключение с кодом, отсутствие кнопки выключения у принудительного, `TwoFactorProfileLinkLayout` в `UserProfileScreen`, пункт меню при `menu.enabled` и его отсутствие по умолчанию, сброс через Layout (с правом и без), `orchid-2fa:reset`, `orchid-2fa:rotate-remember-tokens`, `orchid:admin` → принудительный, смена e-mail и пароля через модель.
 - **Статика:** Larastan (level 8, без baseline), Pint (preset `laravel`).

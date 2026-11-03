@@ -1,0 +1,44 @@
+laravel: '@testbench'
+
+env:
+  - APP_NAME="Orchid 2FA Workbench"
+  - APP_KEY=base64:OFJhSMaf+IlCQdGdIAESkccWrSoVflzr+J4TxvigodI=
+  - APP_ENV=local
+  - APP_DEBUG=true
+  - DB_CONNECTION=sqlite
+  - MAIL_MAILER=log
+  - SCOUT_DRIVER=null
+
+providers:
+  - Nakipelo\Orchid2FA\Orchid2FAServiceProvider
+  - Workbench\App\Providers\WorkbenchServiceProvider
+
+migrations:
+  - vendor/orchid/platform/database/migrations
+  - workbench/database/migrations
+
+seeders:
+  - Workbench\Database\Seeders\DatabaseSeeder
+
+workbench:
+  start: '/admin'
+  install: true
+  health: false
+  discovers:
+    web: false
+    api: false
+    commands: false
+    components: false
+    factories: false
+    views: false
+  build:
+    - asset-publish
+    - create-sqlite-db
+    - db-wipe
+    - migrate-fresh
+  assets:
+    - laravel-assets
+  sync:
+    - from: storage
+      to: workbench/storage
+      reverse: true

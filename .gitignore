@@ -1,0 +1,15 @@
+/vendor/
+composer.lock
+/.phpunit.cache/
+/.phpunit.result.cache
+/build/
+/.idea/
+/.junie/
+/.vscode/
+.DS_Store
+
+# Workbench (Orchestra Testbench) artifacts
+/workbench/storage
+/workbench/.env
+/workbench/.env.dusk
+/workbench/bootstrap/cache/

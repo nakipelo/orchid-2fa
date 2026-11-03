@@ -1,0 +1,86 @@
+{
+    "name": "nakipelo/orchid-2fa",
+    "description": "Two-factor authentication (e-mail one-time code) for the Laravel Orchid admin panel login.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "laravel",
+        "orchid",
+        "2fa",
+        "two-factor",
+        "authentication"
+    ],
+    "require": {
+        "php": "^8.2",
+        "laravel/framework": "^11.35 || ^12.0 || ^13.0",
+        "orchid/platform": "^14.53"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.18.3",
+        "orchestra/testbench": "^9.9 || ^10.0 || ^11.0",
+        "pestphp/pest": "^3.7 || ^4.0",
+        "pestphp/pest-plugin-laravel": "^3.0 || ^4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Nakipelo\\Orchid2FA\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Nakipelo\\Orchid2FA\\Tests\\": "tests/",
+            "Workbench\\App\\": "workbench/app/",
+            "Workbench\\Database\\Factories\\": "workbench/database/factories/",
+            "Workbench\\Database\\Seeders\\": "workbench/database/seeders/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Nakipelo\\Orchid2FA\\Orchid2FAServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "scripts": {
+        "post-autoload-dump": [
+            "@clear",
+            "@prepare"
+        ],
+        "clear": "@php vendor/bin/testbench package:purge-skeleton --ansi",
+        "prepare": "@php vendor/bin/testbench package:discover --ansi",
+        "build": "@php vendor/bin/testbench workbench:build --ansi",
+        "serve": [
+            "Composer\\Config::disableProcessTimeout",
+            "@build",
+            "@php vendor/bin/testbench serve --ansi"
+        ],
+        "test": "@php vendor/bin/pest",
+        "analyse": "@php vendor/bin/phpstan analyse --memory-limit=1G",
+        "lint": "@php vendor/bin/pint --test",
+        "format": "@php vendor/bin/pint",
+        "check-adapter": "@php bin/check-adapter.php",
+        "check": [
+            "@lint",
+            "@check-adapter",
+            "@analyse",
+            "@test"
+        ]
+    },
+    "scripts-descriptions": {
+        "serve": "Build the workbench (SQLite, migrations, seed) and serve Orchid at http://127.0.0.1:8000/admin. Test admin: admin@example.com / password",
+        "test": "Run the Pest test suite",
+        "analyse": "Run Larastan (PHPStan level 8)",
+        "lint": "Check code style with Pint (laravel preset)",
+        "check-adapter": "Fail if platform./platform::/Orchid\\ appear in src/ outside src/Support/Orchid.php",
+        "check": "Run all checks: pint, adapter check, larastan, pest"
+    }
+}
