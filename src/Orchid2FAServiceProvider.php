@@ -92,7 +92,11 @@ class Orchid2FAServiceProvider extends ServiceProvider
      */
     protected function checkChannels(): void
     {
-        $this->app->make(ChannelRegistry::class)->check($this->app->environment('local', 'testing'), Log::channel(
+        // environment() without arguments is the environment name (a string); comparing it here
+        // keeps the flag a bool on every supported Laravel version.
+        $strict = in_array($this->app->environment(), ['local', 'testing'], true);
+
+        $this->app->make(ChannelRegistry::class)->check($strict, Log::channel(
             is_string($channel = config('orchid-2fa.log.channel')) && $channel !== '' ? $channel : null,
         ));
     }

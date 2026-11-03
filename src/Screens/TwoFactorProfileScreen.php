@@ -126,9 +126,18 @@ class TwoFactorProfileScreen extends Screen
         $pending = $this->pendingFor($request, $policy, $channels, $user, $status);
         $step = $this->stepChannel($pending, $current, $channels);
         $input = ($step ?? $current)?->codeInput();
-        $state = $pending?->step === ProfileChallenge::STEP_ENROLL && $step !== null
-            ? EnrollmentState::fromSession($request->session(), $user, $step->name(), $pending->action, $this->confirmationTtl())
-            : null;
+        $enrollmentView = null;
+        $enrollmentData = [];
+
+        if ($pending?->step === ProfileChallenge::STEP_ENROLL && $step !== null) {
+            $state = EnrollmentState::fromSession($request->session(), $user, $step->name(), $pending->action, $this->confirmationTtl());
+
+            if ($state !== null) {
+                $enrollmentView = $step->enrollmentView();
+                $enrollmentData = $step->enrollmentData($user, $state);
+            }
+        }
+
         $hasCodes = $current !== null && $current->needsRecoveryCodes() && $status !== 'disabled';
         $remaining = $hasCodes ? $recovery->remaining($user) : 0;
         $active = $status !== 'disabled' && $status !== 'not_enrolled';
@@ -146,8 +155,8 @@ class TwoFactorProfileScreen extends Screen
             'stepIsDelivery' => $step === null || $step->requiresDelivery(),
             'stepPrompt' => $step !== null ? $step->prompt($user) : '',
             'stepLabel' => $step?->label() ?? '',
-            'enrollmentView' => $state !== null ? $step->enrollmentView() : null,
-            'enrollmentData' => $state !== null ? $step->enrollmentData($user, $state) : [],
+            'enrollmentView' => $enrollmentView,
+            'enrollmentData' => $enrollmentData,
             'choices' => $this->choicesFor($channels, $active ? $current : null, ! $active),
             'canRebind' => $active && $method->state === UserMethod::ACTIVE && $current?->enrollmentView() !== null,
             'hasRecoveryCodes' => $hasCodes,
