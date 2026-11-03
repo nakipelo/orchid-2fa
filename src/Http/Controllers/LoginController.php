@@ -11,12 +11,15 @@ use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Challenge\PendingLogin;
 use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
+use Nakipelo\Orchid2FA\Channels\UserMethod;
 use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
+use Nakipelo\Orchid2FA\Events\TwoFactorFailed;
 use Nakipelo\Orchid2FA\Events\TwoFactorPassed;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
 use Nakipelo\Orchid2FA\Exceptions\SendLimitExceededException;
@@ -79,20 +82,75 @@ class LoginController
             return $this->completeLogin($request, $user, $remember);
         }
 
-        // A trusted device replaces the code, never the password (spec §4.4).
-        if ($this->trustedDevices->passes($request, $user, $this->policy->record($user))) {
+        $method = $this->channels->methodFor($user);
+
+        // The driver of the user's method is gone, or no channel is allowed: no login (spec 0.2 §4.3, §4.5).
+        if ($method->state === UserMethod::UNAVAILABLE || $this->channels->allowed() === []) {
+            $this->failClosed($user, $method);
+        }
+
+        // A trusted device replaces the code, never the password (spec §4.4); not the enrollment
+        // of a method the user does not have yet (spec 0.2 §5.4).
+        if ($method->state === UserMethod::ACTIVE
+            && $this->trustedDevices->passes($request, $user, $this->policy->record($user))) {
             $this->events->dispatch(new TwoFactorPassed(
                 $user,
                 Orchid::guardName(),
                 TwoFactorPassed::VIA_TRUSTED_DEVICE,
                 false,
-                $this->channels->for($user)?->name() ?? $this->channels->defaultName(),
+                $method->channel?->name() ?? $this->channels->defaultName(),
             ));
 
             return $this->completeLogin($request, $user, $remember);
         }
 
+        if ($method->state === UserMethod::NONE) {
+            return $this->startEnrollment($request, $user, $remember);
+        }
+
         return $this->startChallenge($request, $user, $remember);
+    }
+
+    /**
+     * No method to pass the second factor with (spec 0.2 §4.5 item 3): the login fails closed with
+     * an error, without a pending login.
+     *
+     * @throws ValidationException
+     */
+    protected function failClosed(Authenticatable $user, UserMethod $method): never
+    {
+        $channel = $method->recorded ?? $this->channels->defaultName();
+
+        $logChannel = $this->config->get('orchid-2fa.log.channel');
+        Log::channel(is_string($logChannel) && $logChannel !== '' ? $logChannel : null)
+            ->error('nakipelo/orchid-2fa: the two-factor method of the user is not available, the login is refused.', [
+                'user_id' => $user->getAuthIdentifier(),
+                'channel' => $channel,
+                'allowed' => $this->channels->allowed(),
+            ]);
+
+        $this->events->dispatch(new TwoFactorFailed($user, Orchid::guardName(), TwoFactorFailed::CHANNEL_UNAVAILABLE, $channel));
+
+        throw ValidationException::withMessages(['email' => $this->trans('errors.channel_unavailable')]);
+    }
+
+    /**
+     * The user needs the second factor but has no method: enrollment at the login, protected by
+     * the password only (spec 0.2 §5.4 A).
+     */
+    protected function startEnrollment(Request $request, Authenticatable $user, bool $remember): Response
+    {
+        $this->ensureRecord($user);
+
+        $request->session()->regenerate();
+
+        PendingLogin::forEnrollment($user, $remember)->store($request->session());
+
+        $url = route(Orchid::enrollRoute());
+
+        return $request->wantsJson()
+            ? new JsonResponse(['two_factor' => true, 'enroll' => true, 'redirect' => $url])
+            : redirect()->to($url);
     }
 
     /**
@@ -179,13 +237,13 @@ class LoginController
      * factor, which drops the confirmation) stop working. A confirmed user keeps the remember
      * cookies issued after the code (spec §4.5).
      *
-     * A new record gets the default channel (spec 0.2 §4.5), as the channel of 0.1 did.
+     * A new record gets the default channel when it is allowed, otherwise none (spec 0.2 §4.9).
      */
     protected function ensureRecord(Authenticatable $user): void
     {
         $record = TwoFactorAuthentication::query()->createOrFirst(
             ['user_id' => $user->getAuthIdentifier()],
-            ['channel' => $this->channels->defaultName()],
+            ['channel' => $this->channels->initialName()],
         );
 
         if ($record->wasRecentlyCreated || $record->confirmed_at === null) {

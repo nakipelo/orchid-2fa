@@ -384,7 +384,7 @@ it('disables 2FA with the code and invalidates the trusted devices', function ()
 
     $this->get(pfUrl())->assertSee('Confirm disabling')->assertSee(pfUrl('disable'), false);
 
-    pfPost('disable', ['code' => tfLastCode()])
+    pfPost('disable', ['code' => tfLastCode(), 'password' => 'password'])
         ->assertSessionHasNoErrors()
         ->assertSessionHas(Toast::SESSION_MESSAGE, 'Two-factor authentication is disabled.');
 
@@ -405,7 +405,7 @@ it('does not disable with a wrong code or without the code request', function ()
         ->assertSessionHas(Toast::SESSION_MESSAGE, 'The code is no longer valid. Please request a new one.');
 
     pfPost('sendDisableCode');
-    pfPost('disable', ['code' => tfWrongCode(tfLastCode())])->assertSessionHasErrors('code');
+    pfPost('disable', ['code' => tfWrongCode(tfLastCode()), 'password' => 'password'])->assertSessionHasErrors('code');
 
     expect(pfRecord($user)->enabled_at)->not->toBeNull()
         ->and(pfRecord($user)->trusted_devices_version)->toBe(1);

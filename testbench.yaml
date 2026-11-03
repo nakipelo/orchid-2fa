@@ -12,6 +12,7 @@ env:
 providers:
   - Nakipelo\Orchid2FA\Orchid2FAServiceProvider
   - Workbench\App\Providers\WorkbenchServiceProvider
+  - Nakipelo\Orchid2FA\Tests\Fixtures\FakeVerifierServiceProvider
 
 migrations:
   - vendor/orchid/platform/database/migrations

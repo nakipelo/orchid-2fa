@@ -12,6 +12,7 @@ use InvalidArgumentException;
 use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
 use Nakipelo\Orchid2FA\Exceptions\UnknownChannelException;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
+use Psr\Log\LoggerInterface;
 
 /**
  * The registry of two-factor channels (spec 0.2 §4.3), a singleton behind the `TwoFactor` facade.
@@ -94,38 +95,129 @@ class ChannelRegistry
     /**
      * Registered channels allowed by `channels.allowed`, in its order (spec 0.2 §4.3).
      *
-     * Stage 1: the intersection only; the warnings and the check of an empty list come in stage 2.
-     *
      * @return list<string>
      */
     public function allowed(): array
     {
-        $allowed = $this->config->get('orchid-2fa.channels.allowed', ['email', 'totp']);
-
-        return array_values(array_filter(
-            array_unique(array_filter(is_array($allowed) ? $allowed : [], 'is_string')),
-            fn (string $name): bool => $this->has($name),
-        ));
+        return array_values(array_filter($this->allowedNames(), fn (string $name): bool => $this->has($name)));
     }
 
     /**
-     * The channel of the user (spec 0.2 §4.5): the channel of the user's record when it is
-     * registered, otherwise the default channel; null when that is not registered either.
+     * Names in `channels.allowed` without a driver: ignored (spec 0.2 §4.3).
      *
-     * Stage 1: `channels.allowed`, availability and the fail-closed branch for an unregistered
-     * driver come in stage 2.
+     * @return list<string>
+     */
+    public function ignored(): array
+    {
+        return array_values(array_filter($this->allowedNames(), fn (string $name): bool => ! $this->has($name)));
+    }
+
+    public function isAllowed(string $name): bool
+    {
+        return in_array($name, $this->allowed(), true);
+    }
+
+    /**
+     * Check `channels.allowed` once the application has booted (spec 0.2 §4.3): an ignored name is
+     * a `warning` in local/testing; no allowed channel at all is an exception in local/testing
+     * (`$strict`) and a `critical` log entry elsewhere (the logins that need the second factor then
+     * fail closed).
+     *
+     * @throws InvalidArgumentException
+     */
+    public function check(bool $strict, LoggerInterface $logger): void
+    {
+        if ($strict && ($ignored = $this->ignored()) !== []) {
+            $logger->warning(sprintf(
+                'nakipelo/orchid-2fa: [orchid-2fa.channels.allowed] lists channels without a registered driver, they are ignored: %s.',
+                implode(', ', $ignored),
+            ));
+        }
+
+        if ($this->allowed() !== []) {
+            return;
+        }
+
+        $message = sprintf(
+            'nakipelo/orchid-2fa: no two-factor channel is allowed: [orchid-2fa.channels.allowed] = [%s], registered: [%s]. '
+            .'Users who need the second factor cannot sign in.',
+            implode(', ', $this->allowedNames()),
+            implode(', ', $this->registered()),
+        );
+
+        if ($strict) {
+            throw new InvalidArgumentException($message);
+        }
+
+        $logger->critical($message);
+    }
+
+    /**
+     * The method of the user (spec 0.2 §4.5): the enrolled and allowed method; an enrolled method
+     * that is no longer allowed (the proof before enrolling an allowed one); otherwise the default
+     * channel when it is allowed and a delivery channel without an enrollment step; null when the
+     * driver of the recorded method is gone (fail closed) or there is no method (enrollment).
      */
     public function for(Authenticatable $user): ?TwoFactorChannel
     {
-        $name = TwoFactorAuthentication::query()
-            ->where('user_id', $user->getAuthIdentifier())
-            ->value('channel');
+        $method = $this->methodFor($user);
 
-        if (is_string($name) && $name !== '' && $this->has($name)) {
-            return $this->channel($name);
+        return $method->state === UserMethod::ACTIVE || $method->state === UserMethod::PROOF ? $method->channel : null;
+    }
+
+    /**
+     * The resolved method of the user with its state (spec 0.2 §4.5).
+     */
+    public function methodFor(Authenticatable $user): UserMethod
+    {
+        $record = TwoFactorAuthentication::query()
+            ->where('user_id', $user->getAuthIdentifier())
+            ->first(['channel', 'confirmed_at']);
+
+        $name = $record?->channel;
+        $name = is_string($name) && $name !== '' ? $name : null;
+
+        if ($name !== null) {
+            $channel = $this->has($name) ? $this->tryChannel($name) : null;
+
+            if ($channel === null) {
+                return new UserMethod(UserMethod::UNAVAILABLE, null, $name);
+            }
+
+            if ($channel->isAvailableFor($user)) {
+                if ($this->isAllowed($name)) {
+                    return new UserMethod(UserMethod::ACTIVE, $channel, $name);
+                }
+
+                // A delivery method proves the user only with a confirmed destination (§5.4 B).
+                if (! $channel->requiresDelivery() || $record?->confirmed_at !== null) {
+                    return new UserMethod(UserMethod::PROOF, $channel, $name);
+                }
+            }
         }
 
-        return $this->has($this->defaultName()) ? $this->channel($this->defaultName()) : null;
+        $default = $this->defaultChannel();
+
+        return $default !== null
+            ? new UserMethod(UserMethod::ACTIVE, $default, $name)
+            : new UserMethod(UserMethod::NONE, null, $name);
+    }
+
+    /**
+     * The default channel when it can serve a user without an enrolled method: allowed, a delivery
+     * channel and without an enrollment step (spec 0.2 §4.5 item 4).
+     */
+    public function defaultChannel(): ?TwoFactorChannel
+    {
+        $name = $this->defaultName();
+
+        if (! $this->isAllowed($name)) {
+            return null;
+        }
+
+        $channel = $this->tryChannel($name);
+
+        return $channel instanceof DeliveryChannel && $channel->enrollmentView() === null ? $channel : null;
     }
 
     /**
@@ -139,11 +231,42 @@ class ChannelRegistry
     }
 
     /**
+     * The name of the channel a record gets when it is created or its method is removed
+     * (disabling, spec 0.2 §4.8–§4.9): the default channel when it is allowed, otherwise null.
+     */
+    public function initialName(): ?string
+    {
+        return $this->isAllowed($this->defaultName()) ? $this->defaultName() : null;
+    }
+
+    /**
      * Drop the created channels; the next channel() creates them again (tests, config changes).
      */
     public function forgetChannels(): void
     {
         $this->channels = [];
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function allowedNames(): array
+    {
+        $allowed = $this->config->get('orchid-2fa.channels.allowed', ['email', 'totp']);
+
+        return array_values(array_unique(array_filter(is_array($allowed) ? $allowed : [], fn ($name): bool => is_string($name) && $name !== '')));
+    }
+
+    /**
+     * The channel, or null when its driver is missing or invalid.
+     */
+    protected function tryChannel(string $name): ?TwoFactorChannel
+    {
+        try {
+            return $this->channel($name);
+        } catch (InvalidArgumentException) {
+            return null;
+        }
     }
 
     protected function resolve(string $name): TwoFactorChannel

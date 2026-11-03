@@ -9,6 +9,7 @@ use Illuminate\Cache\RateLimiter;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Nakipelo\Orchid2FA\Challenge\Challenge;
+use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Challenge\CodeInput;
 use Nakipelo\Orchid2FA\Challenge\CodeStore;
 use Nakipelo\Orchid2FA\Challenge\EnrollmentState;
@@ -17,7 +18,6 @@ use Nakipelo\Orchid2FA\Challenge\StoredCode;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
 use Nakipelo\Orchid2FA\Channels\Concerns\ConfiguresChannel;
 use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
 use Nakipelo\Orchid2FA\Exceptions\SendLimitExceededException;
 use Throwable;
@@ -239,16 +239,24 @@ abstract class DeliveryChannel implements TwoFactorChannel
     }
 
     /**
-     * A code to the destination; its challenge id is kept in the state.
+     * A code to the destination, issued through the ChallengeManager (send limits, events,
+     * fail-closed, spec 0.2 §4.6) with the context of the state; its challenge id is kept in the
+     * state under `challenge_id`. Calling it again sends a new code ("send again").
      *
      * @throws SendLimitExceededException
      * @throws DeliveryFailedException
      */
     public function startEnrollment(Authenticatable $user, EnrollmentState $state): void
     {
-        $state->put('challenge_id', $this->issue($user, TwoFactorChallengeSent::CONTEXT_ENROLL)->id);
+        $challenge = Container::getInstance()->make(ChallengeManager::class)->issue($user, $state->context, $this);
+
+        $state->put('challenge_id', $challenge->id);
     }
 
+    /**
+     * Check the code of the step. Called by ChallengeManager::confirmEnrollment(), which counts the
+     * attempt before.
+     */
     public function confirmEnrollment(Authenticatable $user, EnrollmentState $state, string $code): VerificationResult
     {
         $challengeId = $state->get('challenge_id');
@@ -257,7 +265,7 @@ abstract class DeliveryChannel implements TwoFactorChannel
             return VerificationResult::Expired;
         }
 
-        return $this->verify($user, new Challenge($challengeId, $this->name(), TwoFactorChallengeSent::CONTEXT_ENROLL), $code);
+        return $this->verify($user, new Challenge($challengeId, $this->name(), $state->context), $code);
     }
 
     /**

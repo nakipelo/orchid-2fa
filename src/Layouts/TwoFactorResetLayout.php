@@ -53,11 +53,17 @@ class TwoFactorResetLayout extends Block
                     ->title(self::trans('profile.status'))
                     ->value(self::trans('reset.status.'.$status)),
 
+                Label::make('two_factor_method')
+                    ->title(self::trans('profile.method'))
+                    ->value($channel?->label() ?? '—')
+                    ->canSee($status !== 'disabled'),
+
                 Label::make('two_factor_destination')
                     ->title(self::trans('profile.destination'))
                     ->value(self::trans($policy->isConfirmed($user) ? 'profile.confirmed' : 'profile.unconfirmed', [
                         'destination' => $destination,
-                    ])),
+                    ]))
+                    ->canSee($channel instanceof DeliveryChannel),
             ]),
         ];
 

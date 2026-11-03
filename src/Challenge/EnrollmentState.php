@@ -14,7 +14,8 @@ use Illuminate\Support\Str;
  * step data here (for example a TOTP secret before it is confirmed); it never leaves the server
  * session and is erased when the step is completed or cancelled.
  *
- * Skeleton of stage 1: the enrollment flows that create and expire the state come in stage 2.
+ * It lives `enrollment_ttl` at the login and `profile.confirmation_ttl` in the profile
+ * (spec 0.2 §4.1); the caller passes the lifetime to fromSession().
  */
 final class EnrollmentState
 {

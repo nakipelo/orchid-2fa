@@ -4,29 +4,36 @@ declare(strict_types=1);
 
 namespace Nakipelo\Orchid2FA;
 
+use Closure;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Log\LogManager;
 use Illuminate\Notifications\Notification;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
-use Nakipelo\Orchid2FA\Channels\EmailChannel;
 use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
+use Nakipelo\Orchid2FA\Events\TwoFactorChannelChanged;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
+use Nakipelo\Orchid2FA\Notifications\SecurityNotifier;
 use Nakipelo\Orchid2FA\Notifications\TwoFactorEmailChangedNotification;
+use Nakipelo\Orchid2FA\Notifications\TwoFactorSecurityNotification;
 use Nakipelo\Orchid2FA\Policy\TwoFactorPolicy;
+use Nakipelo\Orchid2FA\Recovery\RecoveryCodes;
 use Nakipelo\Orchid2FA\Support\Orchid;
+use Psr\Log\LoggerInterface;
 use ReflectionClass;
 
 /**
- * State changes of a user's two-factor authentication: voluntary enabling and disabling
- * (spec §4.7), reset by an administrator (§4.8), e-mail change (§4.9), remember token
- * rotation (§4.5). Who may do what is checked by the callers (screens, commands).
+ * State changes of a user's two-factor authentication: enrollment of a method and disabling
+ * (spec 0.2 §4.8, §5.4–§5.8), reset by an administrator (§5.10), e-mail change (§5.11), remember
+ * token rotation (§4.5 of 0.1). Who may do what is checked by the callers (screens, commands).
  */
 class TwoFactorManager
 {
@@ -37,50 +44,160 @@ class TwoFactorManager
         protected TwoFactorPolicy $policy,
         protected LogManager $log,
         protected ChannelRegistry $channels,
+        protected RecoveryCodes $recoveryCodes,
+        protected SecurityNotifier $notifier,
+        protected Dispatcher $events,
     ) {}
 
     /**
-     * Voluntary enabling after a correct code: `enabled_at = confirmed_at = now()`, the channel,
-     * and the remember token is rotated so that older remember cookies stop working (spec §4.5, §4.7).
+     * A method has been enrolled (spec 0.2 §4.8): at the login, in the profile (enabling, switching,
+     * rebinding). Writes the channel and `confirmed_at = now()`; `enabled_at = now()` for a voluntary
+     * enabling (it stays on a switch or rebind); calls forget() of the previous channel on a switch;
+     * signs out of the trusted devices on a switch or rebind; rotates the remember token; issues a new
+     * set of recovery codes for a channel that needs them (and removes them otherwise); fires
+     * `TwoFactorChannelChanged` and sends the security notice.
      *
-     * `$channel` is the channel whose code confirmed the enabling; by default the user's channel.
-     * Becomes `commitEnrollment()` in stage 2 of 0.2 (spec 0.2 §4.8).
+     * @param  string  $reason  `TwoFactorChannelChanged::ENROLLED|SWITCHED|REBOUND`
+     * @return list<string>|null the plain recovery codes to show once, or null
      */
-    public function enable(Authenticatable $user, ?TwoFactorChannel $channel = null): TwoFactorAuthentication
+    public function commitEnrollment(Authenticatable $user, TwoFactorChannel $channel, string $reason, bool $voluntary = false): ?array
     {
-        $record = $this->record($user);
-        $now = now();
+        $to = $channel->name();
 
-        $record->forceFill([
-            'enabled_at' => $now,
-            'confirmed_at' => $now,
-            'channel' => ($channel ?? $this->channels->for($user))?->name() ?? $this->channels->defaultName(),
-        ])->save();
+        [$from, $codes] = $this->transaction(function () use ($user, $channel, $to, $reason, $voluntary): array {
+            $record = $this->record($user);
+            $from = $record->exists && is_string($record->channel) && $record->channel !== '' ? $record->channel : null;
+            $now = now();
 
-        $this->rotateRememberToken($user);
+            $record->forceFill([
+                'channel' => $to,
+                'confirmed_at' => $now,
+                'enabled_at' => $voluntary && $record->enabled_at === null ? $now : $record->enabled_at,
+            ])->save();
 
-        return $record;
+            if ($from !== null && $from !== $to) {
+                $this->forgetChannelData($user, $from);
+            }
+
+            if ($reason === TwoFactorChannelChanged::REBOUND || ($from !== null && $from !== $to)) {
+                $this->forgetTrustedDevices($user);
+            }
+
+            $this->rotateRememberToken($user);
+
+            if ($channel->needsRecoveryCodes()) {
+                return [$from, $this->recoveryCodes->generate($user)];
+            }
+
+            $this->recoveryCodes->delete($user);
+
+            return [$from, null];
+        });
+
+        $this->channelChanged($user, $from, $to, $reason);
+
+        return $codes;
     }
 
     /**
-     * Voluntary disabling after a correct code: `enabled_at = confirmed_at = null` and
-     * the trusted devices are invalidated (spec §4.7).
+     * Voluntary disabling after the confirmation with the current method and the password
+     * (spec 0.2 §5.8): `enabled_at = confirmed_at = null`, the trusted devices are invalidated, the
+     * driver's data and the recovery codes are erased, the channel becomes the default one (or null),
+     * `TwoFactorChannelChanged(disabled)` and the security notice.
      */
     public function disable(Authenticatable $user): void
     {
-        $this->clearRecord($user);
+        $from = $this->transaction(function () use ($user): ?string {
+            $from = $this->recordedChannel($user);
+
+            TwoFactorAuthentication::query()
+                ->where('user_id', $user->getAuthIdentifier())
+                ->update(['enabled_at' => null, 'confirmed_at' => null, 'channel' => $this->channels->initialName()]);
+
+            $this->forgetTrustedDevices($user);
+
+            if ($from !== null) {
+                $this->forgetChannelData($user, $from);
+            }
+
+            $this->recoveryCodes->delete($user);
+
+            return $from;
+        });
+
+        $this->channelChanged($user, $from, null, TwoFactorChannelChanged::DISABLED);
     }
 
     /**
-     * Reset by an administrator (spec §4.8): as disabling, plus the active code and the
-     * counters are removed and the remember token is rotated, so the remember cookies of the
-     * user stop working. An enforced user gets a code to the current address on the next login.
+     * Reset by an administrator (spec §4.8 of 0.1, §5.10 of 0.2): as disabling, plus the active code
+     * and all counters are removed and the remember token is rotated. The driver's data are erased
+     * when its driver is registered (otherwise only the data of this package, with a warning); the
+     * channel becomes `email` when it is allowed, otherwise null (the next login of an enforced user
+     * enrolls a method). Fires `TwoFactorChannelChanged(reset)` and sends the security notice.
      */
     public function reset(Authenticatable $user): void
     {
-        $this->clearRecord($user);
-        $this->challenges->clear($user);
-        $this->rotateRememberToken($user);
+        $from = $this->transaction(function () use ($user): ?string {
+            $from = $this->recordedChannel($user);
+
+            TwoFactorAuthentication::query()
+                ->where('user_id', $user->getAuthIdentifier())
+                ->update([
+                    'enabled_at' => null,
+                    'confirmed_at' => null,
+                    'channel' => $this->channels->isAllowed('email') ? 'email' : null,
+                ]);
+
+            $this->forgetTrustedDevices($user);
+
+            if ($from !== null) {
+                $this->forgetChannelData($user, $from);
+            }
+
+            $this->recoveryCodes->delete($user);
+            $this->challenges->clear($user);
+            $this->rotateRememberToken($user);
+
+            return $from;
+        });
+
+        $this->channelChanged($user, $from, null, TwoFactorChannelChanged::RESET);
+    }
+
+    /**
+     * Reset every user whose method is `$channel` (spec 0.2 §5.10), e.g. after its driver was
+     * removed; the name is not checked against the registry. Each user is a separate reset();
+     * a record whose user the guard provider does not return is skipped (`$onSkipped`).
+     *
+     * @param  (Closure(int|string): void)|null  $onSkipped  called with the user id of a skipped record
+     * @return int the number of users reset
+     */
+    public function resetChannel(string $channel, ?Closure $onSkipped = null): int
+    {
+        $provider = Orchid::guard()->getProvider();
+        $count = 0;
+
+        TwoFactorAuthentication::query()
+            ->where('channel', $channel)
+            ->chunkById(100, function (Collection $records) use ($provider, $onSkipped, &$count): void {
+                foreach ($records as $record) {
+                    /** @var TwoFactorAuthentication $record */
+                    $user = $provider->retrieveById($record->user_id);
+
+                    if ($user === null) {
+                        if ($onSkipped !== null) {
+                            $onSkipped($record->user_id);
+                        }
+
+                        continue;
+                    }
+
+                    $this->reset($user);
+                    $count++;
+                }
+            });
+
+        return $count;
     }
 
     /**
@@ -129,18 +246,15 @@ class TwoFactorManager
             return;
         }
 
-        $email = $this->emailChannel();
+        $email = $this->notifier->emailChannel();
 
         try {
             $email->notify($oldAddress, $this->makeEmailChangedNotification($email->maskedDestination($user)));
         } catch (DeliveryFailedException $e) {
-            $channel = $this->config->get('orchid-2fa.log.channel');
-
-            $this->log->channel(is_string($channel) && $channel !== '' ? $channel : null)
-                ->error('nakipelo/orchid-2fa: the e-mail change notice could not be sent.', [
-                    'user_id' => $user->getAuthIdentifier(),
-                    'exception' => $e,
-                ]);
+            $this->logger()->error('nakipelo/orchid-2fa: the e-mail change notice could not be sent.', [
+                'user_id' => $user->getAuthIdentifier(),
+                'exception' => $e,
+            ]);
         }
     }
 
@@ -181,29 +295,64 @@ class TwoFactorManager
             ->update(['confirmed_at' => null]);
     }
 
-    protected function clearRecord(Authenticatable $user): void
+    /**
+     * Erase the driver's data of the user (its forget() hook); when the driver is not registered,
+     * only the data of this package are reset and a warning is logged (spec 0.2 §5.10).
+     */
+    protected function forgetChannelData(Authenticatable $user, string $channel): void
     {
-        TwoFactorAuthentication::query()
-            ->where('user_id', $user->getAuthIdentifier())
-            ->update(['enabled_at' => null, 'confirmed_at' => null]);
+        try {
+            $driver = $this->channels->has($channel) ? $this->channels->channel($channel) : null;
+        } catch (InvalidArgumentException) {
+            $driver = null;
+        }
 
-        $this->forgetTrustedDevices($user);
+        if ($driver === null) {
+            $this->logger()->warning(sprintf(
+                'nakipelo/orchid-2fa: the two-factor channel [%s] is not registered; its data of the user stay in the tables of its driver.',
+                $channel,
+            ), ['user_id' => $user->getAuthIdentifier()]);
+
+            return;
+        }
+
+        $driver->forget($user);
+    }
+
+    protected function channelChanged(Authenticatable $user, ?string $from, ?string $to, string $reason): void
+    {
+        $this->events->dispatch(new TwoFactorChannelChanged($user, Orchid::guardName(), $from, $to, $reason));
+
+        $this->notifier->send($user, TwoFactorSecurityNotification::CHANNEL_CHANGED, [
+            'from' => $from,
+            'to' => $to,
+            'reason' => $reason,
+        ]);
+    }
+
+    protected function recordedChannel(Authenticatable $user): ?string
+    {
+        $channel = TwoFactorAuthentication::query()->where('user_id', $user->getAuthIdentifier())->value('channel');
+
+        return is_string($channel) && $channel !== '' ? $channel : null;
     }
 
     /**
-     * The channel `email` of the registry, the same one that sends the codes; the base
-     * EmailChannel if it is not registered or does not extend EmailChannel (the notice is always
-     * an e-mail, spec 0.2 §4.8).
+     * @template T
+     *
+     * @param  Closure(): T  $callback
+     * @return T
      */
-    protected function emailChannel(): EmailChannel
+    protected function transaction(Closure $callback): mixed
     {
-        try {
-            $channel = $this->channels->has('email') ? $this->channels->channel('email') : null;
-        } catch (InvalidArgumentException) {
-            $channel = null;
-        }
+        return (new TwoFactorAuthentication)->getConnection()->transaction($callback);
+    }
 
-        return $channel instanceof EmailChannel ? $channel : $this->container->make(EmailChannel::class);
+    protected function logger(): LoggerInterface
+    {
+        $channel = $this->config->get('orchid-2fa.log.channel');
+
+        return $this->log->channel(is_string($channel) && $channel !== '' ? $channel : null);
     }
 
     protected function record(Authenticatable $user): TwoFactorAuthentication

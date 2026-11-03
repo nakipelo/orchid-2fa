@@ -12,7 +12,9 @@ use Illuminate\Support\Facades\Notification;
 use Illuminate\Testing\TestResponse;
 use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
 use Nakipelo\Orchid2FA\Channels\EmailChannel;
+use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Notifications\TwoFactorCodeNotification;
+use Nakipelo\Orchid2FA\Tests\Fixtures\FakeVerifierChannel;
 use Nakipelo\Orchid2FA\Tests\TestCase;
 use Symfony\Component\Mime\Email;
 use Symfony\Component\Mime\RawMessage;
@@ -164,4 +166,58 @@ function tfEnforceCsrf(): void
             return false;
         }
     });
+}
+
+/*
+|--------------------------------------------------------------------------
+| Helpers of the verifier channel tests (spec 0.2 §10.1): the test driver `fake`
+|--------------------------------------------------------------------------
+*/
+
+/**
+ * Register the test driver `fake` and allow it (with e-mail unless `$allowed` says otherwise).
+ *
+ * @param  list<string>  $allowed
+ */
+function tfUseFake(array $allowed = ['email', 'fake']): void
+{
+    FakeVerifierChannel::register();
+    config(['orchid-2fa.channels.allowed' => $allowed]);
+}
+
+/**
+ * A user whose method is the enrolled `fake` channel: enforced, or voluntary (enabled) with `$enforced = false`.
+ */
+function tfFakeUser(string $email = 'enforced@example.com', bool $enforced = true): User
+{
+    $user = $enforced ? tfEnforcedUser($email) : tfUser($email);
+    FakeVerifierChannel::enrollUser($user);
+
+    TwoFactorAuthentication::query()->updateOrCreate(
+        ['user_id' => $user->id],
+        ['channel' => 'fake', 'confirmed_at' => now(), 'enabled_at' => $enforced ? null : now()],
+    );
+
+    return $user;
+}
+
+function tfFakeCode(User $user, int $offset = 0): string
+{
+    return FakeVerifierChannel::currentCode($user, $offset);
+}
+
+/**
+ * A code the fake channel refuses for the user now.
+ */
+function tfWrongFakeCode(User $user): string
+{
+    $valid = [tfFakeCode($user, -1), tfFakeCode($user), tfFakeCode($user, 1)];
+
+    foreach (['000000', '111111', '222222'] as $code) {
+        if (! in_array($code, $valid, true)) {
+            return $code;
+        }
+    }
+
+    return '333333';
 }

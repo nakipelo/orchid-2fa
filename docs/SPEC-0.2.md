@@ -136,6 +136,8 @@ Value-objects (публичный API, `Nakipelo\Orchid2FA\Challenge\`):
 
 *Уточнения этапа 1 (в коде):* `bootChannel()`, `name()` (имя из реестра; `LogicException`, если канал создан мимо реестра — кроме `EmailChannel`, у которого `'email'`) и `label()` по умолчанию (`Str::headline(name())`) — во внутреннем трейте `Channels\Concerns\ConfiguresChannel`, общем для обоих базовых классов. `generateCode()` — `protected`, не `final` (тестовые хелперы подменяют генерацию кода через наследника `EmailChannel`). `StoredCode` хранит ещё `channel` и `context` вызова: `activeChallenge()` возвращает `Challenge` своего канала и не переиспользует код другого delivery-канала. Ошибка `send()` любого типа удаляет код (fail-closed) и пробрасывается; превращение в `DeliveryFailedException` — в оркестраторе. `startEnrollment()` delivery-канала кладёт id выпущенного кода в `EnrollmentState` под ключом `challenge_id`. `VerifierChannel::verify()`: пустой после нормализации код — `Invalid` без вызова `verifyCode()`.
 
+*Уточнения этапа 2 (в коде):* `DeliveryChannel::startEnrollment()` выпускает код через `ChallengeManager::issue()` (лимиты отправки, `TwoFactorChallengeSent`/`TwoFactorLockedOut`/`TwoFactorFailed`, fail-closed), контекст — `EnrollmentState::$context` (`enroll` при входе; `enable`, `switch`, `rebind` в профиле); повторный вызов — «Отправить повторно». `confirmEnrollment()` любого канала вызывается только из `ChallengeManager::confirmEnrollment()`, который считает попытку до драйвера.
+
 **`VerifierChannel`**:
 
 | Метод | Кто | Поведение |
@@ -167,6 +169,8 @@ TwoFactor::for(Authenticatable $user): ?TwoFactorChannel;  // действующ
 
 Дополнительно (этап 1): `defaultName(): string` — канал по умолчанию `channel` (реестр — единственное место, где читается `config('orchid-2fa.channel')`); `forgetChannels()` — сбросить кеш созданных каналов (тесты, смена конфига). На этапе 1 `for()` упрощён: `record.channel` зарегистрирован — он, иначе канал по умолчанию, иначе null; `allowed()` — только пересечение без предупреждений; полная логика §4.5 и проверки §4.3 — этап 2.
 
+*Уточнения этапа 2 (в коде):* `methodFor(Authenticatable): UserMethod` (`@internal` value-object: `state` — `active` (п. 1 и 4), `proof` (п. 2), `unavailable` (п. 3), `none` (п. 4 без канала по умолчанию); `channel`, `recorded`), `for()` возвращает канал для `active` и `proof`; `ignored()`, `isAllowed()`, `defaultChannel()` (канал по умолчанию, если разрешён, delivery и без шага enrollment), `initialName()` (канал новой записи и записи после выключения: по умолчанию, если разрешён, иначе null), `check(bool $strict, LoggerInterface)` — проверка §4.3, вызывается провайдером в `booted` (`strict` = `local`/`testing`). Драйвер, который не создаётся (`channels.<name>.driver` не наследник базового класса), для пользователя — `unavailable`. Раздел `about`: «Default channel», «Registered channels», «Allowed channels», «Ignored channels».
+
 Драйвер регистрируется в `boot()` своего провайдера (`TwoFactor::extend('totp', …)`); собственный конфиг держит в своём файле (`config/orchid-2fa-totp.php`), а не в `orchid-2fa.channels.totp`: `mergeConfigFrom` сливает только верхний уровень, и опубликованный `orchid-2fa.php` затёр бы `channels` драйвера.
 
 **Неизвестные имена в `channels.allowed`:**
@@ -191,6 +195,12 @@ TwoFactor::for(Authenticatable $user): ?TwoFactorChannel;  // действующ
 
 Публичные методы: `channelFor(Authenticatable): TwoFactorChannel` (`TwoFactor::for()`, `UnknownChannelException`, если канала нет), `start(Authenticatable $user, string $context, ?TwoFactorChannel $channel = null): Challenge` (активный код delivery-канала или новый вызов — вход), `issue(Authenticatable $user, string $context = 'login', ?TwoFactorChannel $channel = null): Challenge` (всегда новый вызов — «Отправить повторно», профиль; §11), `annul(Authenticatable)` (аннулировать активный код любого канала, смена адреса), `verify(Authenticatable, Challenge, string): VerificationResult`, `verifyRecoveryCode(…)`, `attemptsLeft(Authenticatable, Challenge): int` (минимум из применимых счётчиков), `sendAvailableIn(Authenticatable): int` (0 для verifier), `activeChallenge(Authenticatable): ?Challenge` (только delivery), `clear(Authenticatable)` (код, все счётчики, включая окно, суточный потолок и маркер уведомления). `channel()` 0.1 удаляется (был глобальным по `config('orchid-2fa.channel')` и игнорировал `record.channel`).
 
+*Уточнения этапа 2 (в коде):*
+- Окно и суточный потолок: исчерпанный счётчик отказывает **без** нового инкремента и без вызова драйвера (иначе заблокированный окном перебор сжигал бы суточный потолок); иначе инкремент всех применимых счётчиков до драйвера, повторная проверка после инкремента (гонка параллельных запросов). Верный код (и резервный) уменьшает окно и потолок на 1: считаются только неверные. Неверный код, после которого исчерпан счётчик, — сразу `LockedOut`; приоритет причин: потолок, окно, per-challenge.
+- Per-challenge: 5-й неверный — `LockedOut(attempts_exceeded)` для любого канала; вызов, исчерпанный раньше (гонка), — `Expired`, как на этапе 1. Контроллер для verifier-вызова и резервного кода на `LockedOut`/`Expired` удаляет pending (`errors.too_many_attempts` / `errors.session_expired`), для delivery — как 0.1.
+- Дополнительные публичные методы: `rejectAttempt(Authenticatable, Challenge, bool $userCounters)` — засчитать неудачу без вызова драйвера (неверный пароль профиля, §5.6 п. 6; события `TwoFactorFailed` нет), `startEnrollment()`, `confirmEnrollment()`, `enrollmentChallenge(TwoFactorChannel, EnrollmentState)` (вызов, чьи попытки считает шаг: delivery — `challenge_id` выпущенного кода, verifier — id состояния), `fallbackChannel(Authenticatable): ?DeliveryChannel` (§13), `lockout(): ?array` (`reason`, `available_in` последней блокировки — для текста «попробуйте через N мин/ч»); `attemptsLeft()` получил третий параметр `?bool $userCounters` (для резервного кода — true).
+- Вызов `fallback`: `verify()` принимает вызов канала `email` с контекстом `fallback`, только пока `fallbackChannel()` пользователя не null.
+
 ### 4.5. Действующий способ пользователя
 
 `TwoFactor::for($user)`:
@@ -201,6 +211,8 @@ TwoFactor::for(Authenticatable $user): ?TwoFactorChannel;  // действующ
 4. Записи нет, `channel = null` или способ не подключён: канал по умолчанию `channel` (`'email'`), если он разрешён и это delivery-канал без шага enrollment, — он (поведение 0.1); иначе действующего способа нет → enrollment при входе (§5.4).
 
 `TwoFactorPolicy` (`requires`, `isEnforced`, `isEnabled`) не меняется; добавляется `channel(Authenticatable): ?string` (имя действующего способа) и статус `not_enrolled` для UI (требуется, но способа нет).
+
+*Уточнения этапа 2 (в коде):* в п. 2 delivery-способ (email) — доказательство, только если `confirmed_at` не null (иначе п. 4, §5.4 А). Cookie доверенного устройства заменяет код только для `active`: при `proof` и `none` вход идёт через вызов/enrollment (иначе массовый перевод §11 обходился бы cookie на 30 дней). `not_enrolled` — `requires()` и состояние `none`.
 
 Все места 0.1.1, где способ брался из глобального `config('orchid-2fa.channel')`, переводятся на способ пользователя на этапе 1 (§12): выбор канала при входе (`ChallengeManager::channel()`), `addressChanged()` (обнулял `confirmed_at` у записи любого канала, §5.11), маска адреса в `TwoFactorResetLayout` и экране профиля (§6.3). Иного смысла у `channel` в 0.1 не было: это канал по умолчанию.
 
@@ -226,6 +238,8 @@ TwoFactor::for(Authenticatable $user): ?TwoFactorChannel;  // действующ
 - Вход по резервному коду не выдаёт cookie доверия (§5.3).
 - Профиль предупреждает при остатке ≤ `recovery_codes.warn_at` (2). Кодов нет и устройства нет — только сброс администратором (README).
 
+*Уточнения этапа 2 (в коде):* хешируется нормализованный код (нижний регистр, без пробелов и дефиса). Неверный резервный код при входе — то же, что неверный код verifier-вызова: 5 неверных на pending удаляют pending.
+
 ### 4.8. `TwoFactorManager`
 
 | 0.1 | 0.2 |
@@ -238,6 +252,8 @@ TwoFactor::for(Authenticatable $user): ?TwoFactorChannel;  // действующ
 
 `emailChannel()` берёт канал `email` из реестра (наследник `EmailChannel`, иначе базовый `EmailChannel`, как 0.1.1).
 
+*Уточнения этапа 2 (в коде):* `commitEnrollment(Authenticatable, TwoFactorChannel, string $reason, bool $voluntary = false)`; `trusted_devices_version` увеличивается и при `enrolled`, если прежний канал записи другой (вариант Б §5.4). `TwoFactorChannelChanged` при `disabled` и `reset` несёт `to = null` (способа нет), хотя в записи остаётся канал по умолчанию/`email`. `resetChannel(string $channel, ?Closure $onSkipped = null): int` — колбэк получает `user_id` пропущенной записи. `emailChannel()` и отправка уведомлений безопасности — во внутреннем `Notifications\SecurityNotifier`.
+
 ### 4.9. Хранение
 
 - `two_factor_authentications` остаётся общей (§5.5 SPEC). Новая миграция `…_make_two_factor_channel_nullable`: `channel` nullable, без default (`null` — «не подключено»); существующие строки сохраняют `'email'`. Модель: `$attributes['channel']` убирается, при создании записи пишется канал по умолчанию, если он разрешён, иначе null. Колонок под конкретные драйверы нет и не будет.
@@ -247,6 +263,8 @@ TwoFactor::for(Authenticatable $user): ?TwoFactorChannel;  // действующ
 - Pending (`PendingLogin`) получает поля `channel`, `stage` (`challenge` | `enroll` | `recovery_codes`), `via` (`code` | `recovery_code` — чем пройден вызов перед enrollment, §5.4 Б) и `stage_started_at` (начало `stage = enroll`, §5.4 п. 7); pending 0.1.1 без них не принимается — пользователь входит заново (как в 0.1.1).
 - `ProfileChallenge` уже на этапе 1 получает поле `channel` (канал кода профиля; вызов проверяется как `Challenge` этого канала).
 - `ProfileChallenge` получает действия `switch`, `rebind`, `regenerate`, `enroll` и поля `target` (имя канала), `step` (`confirm_current` | `enroll` | `show_codes`), `confirmed_at`. Пароль в `ProfileChallenge` не хранится: он проверяется в запросе подтверждения и сразу отбрасывается.
+
+*Уточнения этапа 2 (в коде):* `PendingLogin` хранит ещё `context` вызова (`login` | `fallback`). `ProfileChallenge`: действия `enable`, `disable`, `switch`, `rebind`, `regenerate` (подключение в профиле — `enable`, отдельного `enroll` нет); шаг `show_codes` не используется — коды для показа лежат в сессии `orchid-2fa.recovery_codes`, привязанные к пользователю, до «Я сохранил коды». Миграции этапа 2: `2026_11_04_000000_make_two_factor_channel_nullable`, `2026_11_04_000001_create_two_factor_recovery_codes_table`.
 - Адаптер `Support\Orchid`: методы новых маршрутов (§6.4); `bin/check-adapter.php` разрешает `Orchid\` в `src/Testing/` (фикстуры наследуют классы Orchid), строки `platform.`/`platform::` там запрещены, как в UI-слое.
 
 ### 4.10. Публичный API
@@ -296,6 +314,8 @@ TwoFactor::for(Authenticatable $user): ?TwoFactorChannel;  // действующ
 
 **Вариант Б — подтверждённый способ есть, но не разрешён** (§4.5 п. 2; например, после `channels.allowed = ['totp']` у пользователей 0.1 с `channel = email` и `confirmed_at` не null): сначала обычный вызов этим способом (§5.1/§5.2) или резервным кодом (§5.3, если способ их имеет), после верного кода — pending переходит в `stage = enroll` (JSON — `200 {"two_factor": true, "enroll": true, "redirect": …}` вместо `204`) и шаги 2–7 варианта А; enrollment без доказательства прежним способом невозможен. Если `confirmed_at = null` при неразрешённом email — вариант А (адрес не подтверждён, доказательства нет). Альтернатива «считать неразрешённый способ отсутствующим» отвергнута: она дала бы злоумышленнику с паролем привязать свой способ, как только администратор сузит `allowed`.
 
+*Уточнения этапа 2 (в коде):* состояние шага — `EnrollmentState` с контекстом `enroll`, повторный GET шага не перезапускает его (код email не шлётся заново); «Отправить повторно» для delivery-канала — `POST two-factor/enroll/{channel}` с `resend=1`. Канал без резервных кодов (email) завершает вход прямо с шага, галочка доверия тогда на шаге (кроме `via = recovery_code`). Не разрешённый `{channel}` — редирект на выбор. Пустой `allowed()` на шаге — fail-closed (`errors.channel_unavailable`).
+
 ### 5.5. Подключение в профиле (добровольное включение)
 
 1. Статус `disabled`. «Включить» → выбор из `TwoFactor::allowed()` (один — без выбора).
@@ -310,6 +330,8 @@ TwoFactor::for(Authenticatable $user): ?TwoFactorChannel;  // действующ
 4. `commitEnrollment(reason: switched)`: `forget()` прежнего канала, инкремент `trusted_devices_version`, ротация `remember_token`, резервные коды выпускаются или удаляются, `enabled_at` не меняется.
 5. Принудительный пользователь может менять способ (не может только выключить).
 6. **Пароль** (здесь и в §5.7–§5.9): поле `password` в форме подтверждения, проверка `provider->validateCredentials($user, ['password' => …])` до проверки кода. Неверный пароль — ошибка на `password` (`errors.invalid_password`), код не проверяется и не гасится (резервный тоже), попытка засчитывается в те же счётчики, что неверный код этого действия (§4.4): перебор пароля из украденной сессии ограничен так же, как перебор кода. Пароль не сохраняется ни в сессии, ни в `ProfileChallenge`.
+
+*Уточнения этапа 2 (в коде):* «Включить» без выбора берёт подключённый разрешённый способ записи, иначе единственный разрешённый, иначе канал по умолчанию; со статусом `not_enrolled` (принудительный без способа) включение доступно, `enabled_at` при этом не ставится. Неверный пароль — `errors.invalid_password` с остатком попыток; 5-я неудача (пароль или код) снимает подтверждение («код больше недействителен»).
 
 ### 5.7. Перепривязка (смена телефона)
 
@@ -363,6 +385,8 @@ Partial — Blade без `@extends`, без форм и без внешних р
 
 Переменные 0.1 сохраняются (`destination`, `codeLength`, `codePattern`, `resendAvailableIn`, `verifyUrl`, `resendUrl`, `cancelUrl`, `trustDevice`, `trustDeviceDays`, `error`, `status`) — опубликованный шаблон 0.1 продолжает работать для email. Новые: `channel` (имя), `prompt`, `codeInput`, `challengeView`, `canResend` (= `requiresDelivery()`), `recoveryUrl` (null, если резервных кодов у способа нет), `fallbackUrl` (null без fallback). Форма резервного кода галочку доверия не рисует (§5.3). Общий partial поля: `orchid-2fa::partials.code-input`. Опубликованный шаблон 0.1 не покажет ссылку на резервный код — README советует перепубликовать.
 
+*Уточнения этапа 2 (в коде):* в `challengeView` передаётся и `user`. `POST two-factor/resend` для verifier-способа отказывает (`errors.resend_unavailable`): новый вызов только обнулил бы per-challenge счётчик. После fallback экран кода показывает email-канал (маска, «Отправить повторно» — повтор fallback-кода). Partial'ы: `partials.code-input`, `partials.trust-device`, `partials.recovery-codes`.
+
 Новые гостевые view: `orchid-2fa::enroll` (выбор способа и шаг подключения), `orchid-2fa::recovery-codes` (показ кодов при входе).
 
 ### 6.3. Экран профиля `TwoFactorProfileScreen`
@@ -412,6 +436,8 @@ Partial — Blade без `@extends`, без форм и без внешних р
 | `profile.confirmation_ttl` | `600` | срок подтверждения текущим способом и шага подключения в профиле, с |
 | `notification.security.enabled` | `true` | все уведомления безопасности (§8.3), включая `attempts_exceeded` |
 | `notification.security_class` | `TwoFactorSecurityNotification::class` | класс уведомления |
+
+*Уточнение этапа 2 (в коде):* `notification.security` — массив `['enabled' => true]`. В контекст уведомления `channel_changed` добавляются `from_label`/`to_label` (переведённые имена каналов, если зарегистрированы).
 
 `code.max_attempts` (5) теперь также лимит неверных на один pending verifier-канала и на одно подтверждение в профиле (неверный пароль считается как неверный код, §5.6 п. 6). `pending_ttl` (600) не меняется и действует до перехода в `stage = enroll`. Ключей TOTP в основном конфиге нет (§13).
 
@@ -497,6 +523,8 @@ Partial — Blade без `@extends`, без форм и без внешних р
 - группы тестов (трейты, можно отключить переопределением с `markTestSkipped` только для неприменимого, например `resend` у verifier): вход (верный, неверный, пустой, чужой пользователь, вызов другого канала), лимиты (per-challenge, окно на пользователя, суточный потолок verifier, delivery — cooldown/час), обходы (verify без pending, `user_id` в теле, повтор кода в другой сессии, параллельный verify), доверенные устройства (выдача, пропуск, инкремент при смене способа), remember (выдача только после 2FA, ротация при enrollment и сбросе), сброс (`isAvailableFor` = false после `forget()`, идемпотентность `forget()`, повторный enrollment поверх оставшихся данных драйвера), резервные коды (если `needsRecoveryCodes()`; вход без cookie доверия), enrollment (без верного кода данных нет, отмена стирает state), отсутствие кодов и секретов в логах и событиях.
 
 Почтовый драйвер (`EmailChannel`) и драйвер-заглушка проходят набор в CI основного пакета; TOTP — в CI своего репозитория.
+
+*Уточнения этапа 2 (в коде):* группы — трейты `Testing\Concerns\Tests{Login,Limits,Bypasses,TrustedDevices,Remember,Reset,RecoveryCodes,Enrollment,Secrets}`; пользователь тестов — принудительный, `channels.allowed = [<канал>]`. `ChannelConformanceTestCase` регистрирует Orchid (`FoundationServiceProvider`) и его алиасы явно, не полагаясь на package discovery: в драйвере нет манифеста Testbench. Миграции: `users` Laravel, Orchid, затем `migrate` (пакет и драйвер). Хуки — как выше; `validCode()` delivery-драйвера возвращает последний отправленный код. Тесты пакета: `tests/Conformance/*`, драйвер-заглушка — `tests/Fixtures/FakeVerifierChannel` + `FakeVerifierServiceProvider` (таблица `two_factor_fake`, view, команда `orchid-2fa-fake:code`), в workbench включается `ORCHID_2FA_FAKE=1` (и `ORCHID_2FA_ALLOWED="email,fake"`); по умолчанию workbench — только email.
 
 ## 11. Upgrade 0.1 → 0.2 (README и CHANGELOG)
 

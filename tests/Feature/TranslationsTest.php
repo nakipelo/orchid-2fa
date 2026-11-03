@@ -63,11 +63,14 @@ it('has no empty lines', function (string $locale) {
 
 it('defines every literal key the package uses', function () {
     $root = dirname(__DIR__, 2);
-    $files = [$root.'/resources/views/challenge.blade.php'];
+    $files = [];
 
-    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root.'/src')) as $file) {
-        if ($file->isFile() && $file->getExtension() === 'php') {
-            $files[] = $file->getPathname();
+    // Since 0.2 every view of the package, not only the code screen.
+    foreach ([$root.'/src', $root.'/resources/views'] as $dir) {
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir)) as $file) {
+            if ($file->isFile() && str_ends_with($file->getFilename(), '.php')) {
+                $files[] = $file->getPathname();
+            }
         }
     }
 

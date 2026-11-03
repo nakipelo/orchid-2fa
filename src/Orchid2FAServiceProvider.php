@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Nakipelo\Orchid2FA;
 
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Foundation\Console\AboutCommand;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
@@ -15,6 +16,7 @@ use Nakipelo\Orchid2FA\Console\ResetTwoFactorCommand;
 use Nakipelo\Orchid2FA\Console\RotateRememberTokensCommand;
 use Nakipelo\Orchid2FA\Exceptions\UnsupportedGuardException;
 use Nakipelo\Orchid2FA\Http\Controllers\ChallengeController;
+use Nakipelo\Orchid2FA\Http\Controllers\EnrollmentController;
 use Nakipelo\Orchid2FA\Http\Controllers\LoginController;
 use Nakipelo\Orchid2FA\Listeners\LogTwoFactorEvents;
 use Nakipelo\Orchid2FA\Screens\TwoFactorProfileScreen;
@@ -38,6 +40,8 @@ class Orchid2FAServiceProvider extends ServiceProvider
         if (config('orchid-2fa.log.enabled')) {
             $this->app->make(Dispatcher::class)->subscribe(LogTwoFactorEvents::class);
         }
+
+        $this->registerAbout();
 
         if ($this->app->runningInConsole()) {
             $this->commands([
@@ -71,12 +75,47 @@ class Orchid2FAServiceProvider extends ServiceProvider
         // all providers have booted, so routes registered here come after Orchid's.
         $this->app->booted(function (): void {
             $this->ensureSessionGuard();
+            $this->checkChannels();
             $this->registerPermissions();
             $this->registerLoginRoute();
             $this->registerChallengeRoutes();
             $this->registerProfileRoutes();
             $this->registerMenu();
             $this->warnAboutMissingTrait();
+        });
+    }
+
+    /**
+     * `channels.allowed` once every driver had the chance to register in its `boot()`
+     * (spec 0.2 §4.3): ignored names are a warning in local/testing, an empty result is an
+     * exception there and a `critical` log entry elsewhere.
+     */
+    protected function checkChannels(): void
+    {
+        $this->app->make(ChannelRegistry::class)->check($this->app->environment('local', 'testing'), Log::channel(
+            is_string($channel = config('orchid-2fa.log.channel')) && $channel !== '' ? $channel : null,
+        ));
+    }
+
+    /**
+     * The section "Orchid 2FA" of `php artisan about` (spec 0.2 §4.3).
+     */
+    protected function registerAbout(): void
+    {
+        if (! class_exists(AboutCommand::class)) {
+            return;
+        }
+
+        AboutCommand::add('Orchid 2FA', function (): array {
+            $registry = $this->app->make(ChannelRegistry::class);
+            $list = static fn (array $names): string => $names === [] ? '—' : implode(', ', $names);
+
+            return [
+                'Default channel' => $registry->defaultName(),
+                'Registered channels' => $list($registry->registered()),
+                'Allowed channels' => $list($registry->allowed()),
+                'Ignored channels' => $list($registry->ignored()),
+            ];
         });
     }
 
@@ -141,6 +180,30 @@ class Orchid2FAServiceProvider extends ServiceProvider
             Route::post('two-factor/cancel', [ChallengeController::class, 'cancel'])
                 ->middleware($guest)
                 ->name($this->localRouteName(Orchid::cancelRoute()));
+
+            Route::post('two-factor/recovery', [ChallengeController::class, 'recovery'])
+                ->middleware([$guest, $throttle])
+                ->name($this->localRouteName(Orchid::recoveryRoute()));
+
+            Route::post('two-factor/fallback', [ChallengeController::class, 'fallback'])
+                ->middleware([$guest, $throttle])
+                ->name($this->localRouteName(Orchid::fallbackRoute()));
+
+            Route::get('two-factor/enroll/{channel?}', [EnrollmentController::class, 'show'])
+                ->middleware($guest)
+                ->name($this->localRouteName(Orchid::enrollRoute()));
+
+            Route::post('two-factor/enroll/{channel}', [EnrollmentController::class, 'confirm'])
+                ->middleware([$guest, $throttle])
+                ->name($this->localRouteName(Orchid::enrollConfirmRoute()));
+
+            Route::get('two-factor/recovery-codes', [EnrollmentController::class, 'showCodes'])
+                ->middleware($guest)
+                ->name($this->localRouteName(Orchid::recoveryCodesRoute()));
+
+            Route::post('two-factor/recovery-codes', [EnrollmentController::class, 'confirmCodes'])
+                ->middleware($guest)
+                ->name($this->localRouteName(Orchid::recoveryCodesConfirmRoute()));
         });
     }
 

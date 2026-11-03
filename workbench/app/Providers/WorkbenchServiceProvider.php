@@ -6,6 +6,7 @@ namespace Workbench\App\Providers;
 
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
+use Nakipelo\Orchid2FA\Tests\Fixtures\FakeVerifierChannel;
 use Orchid\Platform\Dashboard;
 use Orchid\Platform\Models\User as OrchidUser;
 use Workbench\App\Models\User;
@@ -28,6 +29,17 @@ class WorkbenchServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Manual checks of the verifier flows (spec 0.2 §12 stage 2): ORCHID_2FA_FAKE=1 registers the
+        // test driver `fake`; ORCHID_2FA_ALLOWED="email,fake" sets channels.allowed. By default the
+        // workbench stays e-mail only.
+        if (filter_var(env('ORCHID_2FA_FAKE', false), FILTER_VALIDATE_BOOL)) {
+            FakeVerifierChannel::register();
+        }
+
+        if (is_string($allowed = env('ORCHID_2FA_ALLOWED')) && $allowed !== '') {
+            config(['orchid-2fa.channels.allowed' => array_map('trim', explode(',', $allowed))]);
+        }
+
         // Orchid loads the application's routes/platform.php from its RouteServiceProvider,
         // after its route macros (Route::screen) exist; do the same once everything is booted.
         $this->app->booted(function (): void {

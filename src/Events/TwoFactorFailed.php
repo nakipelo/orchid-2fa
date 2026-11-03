@@ -21,6 +21,17 @@ final class TwoFactorFailed extends TwoFactorEvent
 
     public const DELIVERY_FAILED = 'delivery_failed';
 
+    /**
+     * A wrong recovery code (spec 0.2 §4.7).
+     */
+    public const INVALID_RECOVERY_CODE = 'invalid_recovery_code';
+
+    /**
+     * The driver of the user's method is not registered (spec 0.2 §4.5 item 3) or no channel is
+     * allowed (§4.3): the login fails closed.
+     */
+    public const CHANNEL_UNAVAILABLE = 'channel_unavailable';
+
     public function __construct(
         Authenticatable $user,
         string $guard,

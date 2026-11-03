@@ -12,9 +12,12 @@ use Nakipelo\Orchid2FA\Support\Orchid;
 /**
  * Two-factor state of a user. Created lazily (spec §4.7).
  *
+ * `channel` is the name of the enrolled method; null — none (spec 0.2 §4.9). `confirmed_at` is not
+ * "the method is enrolled" (the driver keeps that), see spec 0.2 §3.
+ *
  * @property int $id
  * @property int $user_id
- * @property string $channel
+ * @property string|null $channel
  * @property Carbon|null $enabled_at voluntary enablement
  * @property Carbon|null $confirmed_at the current address was confirmed with a code
  * @property int $trusted_devices_version
@@ -40,7 +43,6 @@ class TwoFactorAuthentication extends Model
      * @var array<string, mixed>
      */
     protected $attributes = [
-        'channel' => 'email',
         'trusted_devices_version' => 1,
     ];
 

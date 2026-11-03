@@ -38,6 +38,10 @@
         "pestphp/pest": "^3.7 || ^4.0",
         "pestphp/pest-plugin-laravel": "^3.0 || ^4.0"
     },
+    "suggest": {
+        "orchestra/testbench": "Required by the conformance suite Nakipelo\\Orchid2FA\\Testing for channel drivers (add it to require-dev of the driver)",
+        "phpunit/phpunit": "Runs the conformance suite Nakipelo\\Orchid2FA\\Testing (or pestphp/pest)"
+    },
     "autoload": {
         "psr-4": {
             "Nakipelo\\Orchid2FA\\": "src/"
@@ -96,7 +100,7 @@
         "test": "Run the Pest test suite",
         "analyse": "Run Larastan (PHPStan level 8)",
         "lint": "Check code style with Pint (laravel preset)",
-        "check-adapter": "Fail if platform./platform:: appear in src/ outside src/Support/Orchid.php, or Orchid\\ outside it and the UI layer (src/Screens, src/Layouts)",
+        "check-adapter": "Fail if platform./platform:: appear in src/ outside src/Support/Orchid.php, or Orchid\\ outside it, the UI layer (src/Screens, src/Layouts) and the conformance suite (src/Testing)",
         "check": "Run all checks: pint, adapter check, larastan, pest"
     }
 }

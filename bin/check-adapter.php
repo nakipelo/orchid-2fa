@@ -9,7 +9,8 @@ declare(strict_types=1);
  *
  * Exception (spec §5.1, stage 4): the Orchid UI layer — src/Screens/ and src/Layouts/ —
  * extends Orchid's Screen/Layout classes and builds fields and actions, so it may use
- * `Orchid\` classes. `platform.` and `platform::` names are forbidden there as well.
+ * `Orchid\` classes; so may the conformance suite src/Testing/ (spec 0.2 §4.9), whose fixtures
+ * extend Orchid's classes. `platform.` and `platform::` names are forbidden there as well.
  *
  * Usage: php bin/check-adapter.php [src-dir]
  */
@@ -27,6 +28,7 @@ $uiPattern = '/platform\.|platform::/';
 $uiDirs = [
     $root.DIRECTORY_SEPARATOR.'Screens'.DIRECTORY_SEPARATOR,
     $root.DIRECTORY_SEPARATOR.'Layouts'.DIRECTORY_SEPARATOR,
+    $root.DIRECTORY_SEPARATOR.'Testing'.DIRECTORY_SEPARATOR,
 ];
 $violations = [];
 
@@ -59,4 +61,4 @@ if ($violations !== []) {
     exit(1);
 }
 
-fwrite(STDOUT, "OK: platform./platform:: only in src/Support/Orchid.php, Orchid\\ also in src/Screens and src/Layouts\n");
+fwrite(STDOUT, "OK: platform./platform:: only in src/Support/Orchid.php, Orchid\\ also in src/Screens, src/Layouts and src/Testing\n");

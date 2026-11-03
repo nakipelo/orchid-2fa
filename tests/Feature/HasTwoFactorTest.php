@@ -21,7 +21,8 @@ it('returns a new unsaved record bound to the user', function () {
 
     expect($record->exists)->toBeFalse()
         ->and($record->user_id)->toBe($user->id)
-        ->and($record->channel)->toBe('email')
+        // No default channel in the model since 0.2 (spec 0.2 §4.9): it is written when the record is created.
+        ->and($record->channel)->toBeNull()
         ->and($record->trusted_devices_version)->toBe(1)
         ->and($user->hasTwoFactorEnabled())->toBeFalse();
 });

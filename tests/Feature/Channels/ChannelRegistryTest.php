@@ -133,6 +133,7 @@ it('intersects channels.allowed with the registered channels in its order', func
 
 it('picks the channel of the user record, otherwise the default channel', function () {
     TwoFactor::extend('fake', fn () => new FakeDeliveryChannel);
+    config(['orchid-2fa.channels.allowed' => ['email', 'fake']]);
     $user = tfUser();
 
     expect(TwoFactor::for($user)?->name())->toBe('email');
@@ -140,15 +141,18 @@ it('picks the channel of the user record, otherwise the default channel', functi
     TwoFactorAuthentication::query()->create(['user_id' => $user->id, 'channel' => 'fake']);
     expect(TwoFactor::for($user)?->name())->toBe('fake');
 
-    // A channel whose driver is gone: stage 1 falls back to the default channel (stage 2: fail-closed).
+    // A channel whose driver is gone: no method, the login fails closed (spec 0.2 §4.5 item 3).
     TwoFactorAuthentication::query()->where('user_id', $user->id)->update(['channel' => 'gone']);
-    expect(TwoFactor::for($user)?->name())->toBe('email');
+    expect(TwoFactor::for($user))->toBeNull()
+        ->and(TwoFactor::methodFor($user)->state)->toBe('unavailable');
 
+    TwoFactorAuthentication::query()->where('user_id', $user->id)->update(['channel' => null]);
     config(['orchid-2fa.channel' => 'fake']);
     expect(TwoFactor::for($user)?->name())->toBe('fake');
 
     config(['orchid-2fa.channel' => 'nothing']);
-    expect(TwoFactor::for($user))->toBeNull();
+    expect(TwoFactor::for($user))->toBeNull()
+        ->and(TwoFactor::methodFor($user)->state)->toBe('none');
 });
 
 it('issues a verifier challenge without side effects and fails closed on a driver error', function () {

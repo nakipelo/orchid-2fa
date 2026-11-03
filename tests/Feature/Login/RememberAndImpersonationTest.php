@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
+use Nakipelo\Orchid2FA\Facades\TwoFactor;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Notifications\TwoFactorCodeNotification;
 use Nakipelo\Orchid2FA\Support\Orchid;
@@ -114,7 +115,7 @@ it('stops an old remember cookie once 2FA becomes required for a user with an ex
     // The record stays after the user enabled and disabled 2FA (confirmed_at = null).
     $user = tfUser();
     $manager = app(TwoFactorManager::class);
-    $manager->enable($user);
+    $manager->commitEnrollment($user, TwoFactor::channel('email'), 'enrolled', true);
     $manager->disable($user);
     expect(TwoFactorAuthentication::query()->where('user_id', $user->id)->exists())->toBeTrue();
 
@@ -153,7 +154,7 @@ it('stops an old remember cookie when the permission is taken away and granted a
 it('stops old remember cookies of users with existing records once enforce_all is turned on', function () {
     $disabled = tfUser('disabled@example.com');
     $manager = app(TwoFactorManager::class);
-    $manager->enable($disabled);
+    $manager->commitEnrollment($disabled, TwoFactor::channel('email'), 'enrolled', true);
     $manager->disable($disabled);
     $reset = tfUser('reset@example.com');
     TwoFactorAuthentication::query()->create(['user_id' => $reset->id, 'confirmed_at' => now()]);

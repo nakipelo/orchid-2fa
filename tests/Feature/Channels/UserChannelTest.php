@@ -31,6 +31,8 @@ beforeEach(function () {
     Notification::fake();
     FakeDeliveryChannel::reset();
     TwoFactor::extend('fake', fn () => new FakeDeliveryChannel);
+    // Since stage 2 an enrolled method has to be allowed to stay the user's method (spec 0.2 §4.5).
+    config(['orchid-2fa.channels.allowed' => ['email', 'fake']]);
 });
 
 function ucRecord(User $user, string $channel, array $attributes = []): TwoFactorAuthentication

@@ -114,7 +114,8 @@ it('keeps the pending login in the session', function () {
 
     expect($session->get('orchid-2fa.pending'))->toBe([
         'user_id' => 5, 'remember' => true, 'created_at' => now()->getTimestamp(), 'challenge_id' => 'challenge',
-        'password_hash' => 'fingerprint', 'channel' => 'email',
+        'password_hash' => 'fingerprint', 'channel' => 'email', 'context' => 'login', 'stage' => 'challenge',
+        'via' => null, 'stage_started_at' => null,
     ])
         ->and(PendingLogin::fromSession($session))->toEqual($pending)
         ->and($pending->isExpired(600))->toBeFalse()

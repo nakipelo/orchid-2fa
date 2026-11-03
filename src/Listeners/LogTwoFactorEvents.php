@@ -6,7 +6,10 @@ namespace Nakipelo\Orchid2FA\Listeners;
 
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Log\LogManager;
+use Nakipelo\Orchid2FA\Events\RecoveryCodesRegenerated;
+use Nakipelo\Orchid2FA\Events\RecoveryCodeUsed;
 use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
+use Nakipelo\Orchid2FA\Events\TwoFactorChannelChanged;
 use Nakipelo\Orchid2FA\Events\TwoFactorEvent;
 use Nakipelo\Orchid2FA\Events\TwoFactorFailed;
 use Nakipelo\Orchid2FA\Events\TwoFactorLockedOut;
@@ -14,8 +17,8 @@ use Nakipelo\Orchid2FA\Events\TwoFactorPassed;
 use Psr\Log\LoggerInterface;
 
 /**
- * Writes the package events to `log.channel`; subscribed when `log.enabled` (spec §5.7).
- * Never logs the code.
+ * Writes the package events to `log.channel`; subscribed when `log.enabled` (spec §5.7, 0.2 §8.2).
+ * Never logs codes, recovery codes or secrets.
  */
 class LogTwoFactorEvents
 {
@@ -34,6 +37,9 @@ class LogTwoFactorEvents
             TwoFactorPassed::class => 'handlePassed',
             TwoFactorFailed::class => 'handleFailed',
             TwoFactorLockedOut::class => 'handleLockedOut',
+            TwoFactorChannelChanged::class => 'handleChannelChanged',
+            RecoveryCodeUsed::class => 'handleRecoveryCodeUsed',
+            RecoveryCodesRegenerated::class => 'handleRecoveryCodesRegenerated',
         ];
     }
 
@@ -69,6 +75,32 @@ class LogTwoFactorEvents
             'channel' => $event->channel,
             'reason' => $event->reason,
             'available_in' => $event->availableIn,
+        ]));
+    }
+
+    public function handleChannelChanged(TwoFactorChannelChanged $event): void
+    {
+        $this->logger()->info('Two-factor method changed.', $this->context($event, [
+            'from' => $event->from,
+            'to' => $event->to,
+            'reason' => $event->reason,
+        ]));
+    }
+
+    public function handleRecoveryCodeUsed(RecoveryCodeUsed $event): void
+    {
+        $this->logger()->warning('Two-factor recovery code used.', $this->context($event, [
+            'channel' => $event->channel,
+            'remaining' => $event->remaining,
+            'context' => $event->context,
+        ]));
+    }
+
+    public function handleRecoveryCodesRegenerated(RecoveryCodesRegenerated $event): void
+    {
+        $this->logger()->info('Two-factor recovery codes regenerated.', $this->context($event, [
+            'channel' => $event->channel,
+            'count' => $event->count,
         ]));
     }
 

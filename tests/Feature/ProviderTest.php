@@ -20,6 +20,8 @@ it('merges the default config', function () {
         ->and(config('orchid-2fa.notification'))->toBe([
             'class' => 'Nakipelo\\Orchid2FA\\Notifications\\TwoFactorCodeNotification',
             'email_changed_class' => 'Nakipelo\\Orchid2FA\\Notifications\\TwoFactorEmailChangedNotification',
+            'security' => ['enabled' => true],
+            'security_class' => 'Nakipelo\\Orchid2FA\\Notifications\\TwoFactorSecurityNotification',
             'queue' => false,
             'connection' => null,
             'queue_name' => null,
@@ -85,8 +87,8 @@ it('publishes the migration under its own name, so the copy replaces the package
 
         $files = app('migrator')->getMigrationFiles([$source, $copy]);
 
-        expect($files)->toHaveCount(1)
-            ->and(dirname((string) reset($files)))->toBe($copy);
+        expect($files)->toHaveCount(count(glob($source.'/*.php') ?: []))
+            ->and(array_values(array_unique(array_map('dirname', $files))))->toBe([$copy]);
     } finally {
         array_map('unlink', glob($copy.'/*.php') ?: []);
         rmdir($copy);

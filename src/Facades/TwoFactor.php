@@ -15,7 +15,12 @@ use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
  * @method static bool has(string $name)
  * @method static list<string> registered()
  * @method static list<string> allowed()
+ * @method static list<string> ignored()
+ * @method static bool isAllowed(string $name)
  * @method static \Nakipelo\Orchid2FA\Contracts\TwoFactorChannel|null for(\Illuminate\Contracts\Auth\Authenticatable $user)
+ * @method static \Nakipelo\Orchid2FA\Channels\UserMethod methodFor(\Illuminate\Contracts\Auth\Authenticatable $user)
+ * @method static \Nakipelo\Orchid2FA\Contracts\TwoFactorChannel|null defaultChannel()
+ * @method static string|null initialName()
  * @method static string defaultName()
  * @method static void forgetChannels()
  *

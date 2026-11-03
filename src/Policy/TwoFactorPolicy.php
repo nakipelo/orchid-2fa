@@ -6,6 +6,8 @@ namespace Nakipelo\Orchid2FA\Policy;
 
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Config\Repository;
+use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
+use Nakipelo\Orchid2FA\Channels\UserMethod;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Support\Orchid;
 
@@ -14,7 +16,10 @@ use Nakipelo\Orchid2FA\Support\Orchid;
  */
 class TwoFactorPolicy
 {
-    public function __construct(protected Repository $config) {}
+    public function __construct(
+        protected Repository $config,
+        protected ChannelRegistry $channels,
+    ) {}
 
     /**
      * Enforced: `enforce_all` or the "2fa.required" Orchid permission.
@@ -47,15 +52,28 @@ class TwoFactorPolicy
     }
 
     /**
-     * Status shown in the UI (spec §6): `required` (enforced), `enabled` (voluntary) or `disabled`.
+     * The name of the user's method (spec 0.2 §4.5), or null: no method or its driver is gone.
+     */
+    public function channel(Authenticatable $user): ?string
+    {
+        return $this->channels->for($user)?->name();
+    }
+
+    /**
+     * Status shown in the UI (spec §6, 0.2 §6.3): `required` (enforced), `enabled` (voluntary),
+     * `disabled`, or `not_enrolled` (required, but the user has no method yet).
      *
-     * @return 'required'|'enabled'|'disabled'
+     * @return 'required'|'enabled'|'disabled'|'not_enrolled'
      */
     public function status(Authenticatable $user): string
     {
+        $enforced = $this->isEnforced($user);
+        $enabled = $this->isEnabled($user);
+
         return match (true) {
-            $this->isEnforced($user) => 'required',
-            $this->isEnabled($user) => 'enabled',
+            ($enforced || $enabled) && $this->channels->methodFor($user)->state === UserMethod::NONE => 'not_enrolled',
+            $enforced => 'required',
+            $enabled => 'enabled',
             default => 'disabled',
         };
     }

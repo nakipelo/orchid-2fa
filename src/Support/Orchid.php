@@ -276,6 +276,49 @@ final class Orchid
         return self::ROUTE_NAME_PREFIX.'two-factor.cancel';
     }
 
+    /**
+     * Routes of 0.2 (spec 0.2 §6.4): recovery code and e-mail fallback at the code step,
+     * enrollment at the login and the recovery codes shown after it.
+     */
+    public static function recoveryRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.recovery';
+    }
+
+    public static function fallbackRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.fallback';
+    }
+
+    public static function enrollRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.enroll';
+    }
+
+    public static function enrollConfirmRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.enroll.confirm';
+    }
+
+    public static function recoveryCodesRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.recovery-codes';
+    }
+
+    public static function recoveryCodesConfirmRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.recovery-codes.confirm';
+    }
+
+    /**
+     * Point `platform.index` (where the final login redirects) to a route (the conformance suite,
+     * spec 0.2 §10.2).
+     */
+    public static function useIndexRoute(string $name): void
+    {
+        config([self::configKey('index') => $name]);
+    }
+
     public static function requiredPermission(): string
     {
         return self::PERMISSION_REQUIRED;

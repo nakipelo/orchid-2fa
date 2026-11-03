@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Nakipelo\Orchid2FA\Layouts;
 
+use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
 use Nakipelo\Orchid2FA\Policy\TwoFactorPolicy;
 use Nakipelo\Orchid2FA\Support\Orchid;
 use Orchid\Screen\Actions\Link;
@@ -32,12 +33,18 @@ class TwoFactorProfileLinkLayout extends Block
         }
 
         $status = app(TwoFactorPolicy::class)->status($user);
+        $channel = app(ChannelRegistry::class)->for($user);
 
         $this->layouts = [
             Layout::rows([
                 Label::make('two_factor_status')
                     ->title(self::trans('profile.status'))
                     ->value(self::trans('status.'.$status)),
+
+                Label::make('two_factor_method')
+                    ->title(self::trans('profile.method'))
+                    ->value($channel?->label() ?? '—')
+                    ->canSee(in_array($status, ['required', 'enabled'], true) && $channel !== null),
             ]),
         ];
 

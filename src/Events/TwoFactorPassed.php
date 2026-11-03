@@ -16,6 +16,13 @@ final class TwoFactorPassed extends TwoFactorEvent
 
     public const VIA_TRUSTED_DEVICE = 'trusted_device';
 
+    public const VIA_RECOVERY_CODE = 'recovery_code';
+
+    /**
+     * The login ended with the enrollment of a method (spec 0.2 §5.4).
+     */
+    public const VIA_ENROLLMENT = 'enrollment';
+
     public function __construct(
         Authenticatable $user,
         string $guard,

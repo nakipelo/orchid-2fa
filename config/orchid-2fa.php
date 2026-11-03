@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Nakipelo\Orchid2FA\Channels\EmailChannel;
 use Nakipelo\Orchid2FA\Notifications\TwoFactorCodeNotification;
 use Nakipelo\Orchid2FA\Notifications\TwoFactorEmailChangedNotification;
+use Nakipelo\Orchid2FA\Notifications\TwoFactorSecurityNotification;
 
 return [
 
@@ -27,16 +28,21 @@ return [
     | Channels
     |--------------------------------------------------------------------------
     |
-    | channel: the default channel, used for a user without a method of their
-    | own. channels.<name>.driver: a class extending DeliveryChannel or
-    | VerifierChannel, or a name registered with TwoFactor::extend(). The 0.1
-    | key "class" is still read when "driver" is not set (deprecated).
+    | channel: the default channel for a user without an enrolled method; used
+    | only when it is allowed and is a delivery channel. channels.allowed: the
+    | methods users may use, in this order; a name without a driver is ignored
+    | (see "php artisan about"). channels.<name>.driver: a class extending
+    | DeliveryChannel or VerifierChannel, or a name registered with
+    | TwoFactor::extend(). The 0.1 key "class" is still read when "driver" is
+    | not set (deprecated).
     |
     */
 
     'channel' => 'email',
 
     'channels' => [
+        'allowed' => ['email', 'totp'],
+
         'email' => [
             'driver' => EmailChannel::class,
             'attribute' => 'email',
@@ -76,11 +82,57 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Verifier channels and recovery codes: attempts per user
+    |--------------------------------------------------------------------------
+    |
+    | Wrong codes of a verifier channel (TOTP) and wrong recovery codes of a
+    | user: user_max_attempts per user_decay seconds and user_max_per_day per
+    | fixed 24 hours. code.max_attempts still limits one challenge.
+    |
+    */
+
+    'verify' => [
+        'user_max_attempts' => 10,
+        'user_decay' => 600,
+        'user_max_per_day' => 30,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Pending login lifetime (seconds)
     |--------------------------------------------------------------------------
     */
 
     'pending_ttl' => 600,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Enrollment at sign-in (seconds, from the start of the step)
+    |--------------------------------------------------------------------------
+    */
+
+    'enrollment_ttl' => 900,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Recovery codes (methods that need them, e.g. TOTP)
+    |--------------------------------------------------------------------------
+    */
+
+    'recovery_codes' => [
+        'count' => 8,
+        'warn_at' => 2,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Profile: lifetime of a confirmation with the current method (seconds)
+    |--------------------------------------------------------------------------
+    */
+
+    'profile' => [
+        'confirmation_ttl' => 600,
+    ],
 
     /*
     |--------------------------------------------------------------------------
@@ -103,12 +155,18 @@ return [
     | (string $code, CarbonInterface $expiresAt).
     | queue: send through the queue (connection / queue_name) instead of
     | synchronously; delivery errors then are not reported to the user.
+    | security: notices about changes of the method, recovery codes and code
+    | guessing, constructed with (string $event, array $context).
     |
     */
 
     'notification' => [
         'class' => TwoFactorCodeNotification::class,
         'email_changed_class' => TwoFactorEmailChangedNotification::class,
+        'security' => [
+            'enabled' => true,
+        ],
+        'security_class' => TwoFactorSecurityNotification::class,
         'queue' => false,
         'connection' => null,
         'queue_name' => null,
@@ -129,7 +187,8 @@ return [
     | Routes
     |--------------------------------------------------------------------------
     |
-    | throttle: per-IP "throttle" middleware parameters for verify and resend.
+    | throttle: per-IP "throttle" middleware parameters for verify, resend,
+    | recovery code, e-mail fallback and the enrollment confirmation.
     |
     */
 

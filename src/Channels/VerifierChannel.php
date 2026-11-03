@@ -19,8 +19,10 @@ use Throwable;
  * A driver implements verifyCode() (with replay protection, atomic under parallel requests),
  * isAvailableFor(), the enrollment methods and forget(). issue() and verify() are final.
  *
- * Skeleton of stage 1: the verifier flows (per-user limits, recovery codes, enrollment) come
- * in stage 2.
+ * The ChallengeManager counts every code of a verifier channel (and its enrollment) against the
+ * challenge, the window of the user and the daily ceiling before the driver is asked
+ * (spec 0.2 §4.4); a user of a verifier channel gets recovery codes unless needsRecoveryCodes()
+ * is overridden.
  */
 abstract class VerifierChannel implements TwoFactorChannel
 {
