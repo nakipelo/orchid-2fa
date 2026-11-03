@@ -25,6 +25,7 @@ use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Policy\TwoFactorPolicy;
 use Nakipelo\Orchid2FA\Support\Orchid;
 use Nakipelo\Orchid2FA\TrustedDevice\TrustedDeviceCookie;
+use Nakipelo\Orchid2FA\TwoFactorManager;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -45,6 +46,7 @@ class LoginController
         protected Dispatcher $events,
         protected Repository $config,
         protected TrustedDeviceCookie $trustedDevices,
+        protected TwoFactorManager $manager,
     ) {
         Orchid::redirectAuthenticatedToIndex();
     }
@@ -155,7 +157,7 @@ class LoginController
         $record = TwoFactorAuthentication::query()->createOrFirst(['user_id' => $user->getAuthIdentifier()]);
 
         if ($record->wasRecentlyCreated) {
-            Orchid::guard()->getProvider()->updateRememberToken($user, Str::random(60));
+            $this->manager->rotateRememberToken($user);
         }
     }
 }

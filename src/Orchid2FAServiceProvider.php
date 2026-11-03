@@ -10,10 +10,13 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Nakipelo\Orchid2FA\Concerns\HasTwoFactor;
+use Nakipelo\Orchid2FA\Console\ResetTwoFactorCommand;
+use Nakipelo\Orchid2FA\Console\RotateRememberTokensCommand;
 use Nakipelo\Orchid2FA\Exceptions\UnsupportedGuardException;
 use Nakipelo\Orchid2FA\Http\Controllers\ChallengeController;
 use Nakipelo\Orchid2FA\Http\Controllers\LoginController;
 use Nakipelo\Orchid2FA\Listeners\LogTwoFactorEvents;
+use Nakipelo\Orchid2FA\Screens\TwoFactorProfileScreen;
 use Nakipelo\Orchid2FA\Support\Orchid;
 
 class Orchid2FAServiceProvider extends ServiceProvider
@@ -34,6 +37,11 @@ class Orchid2FAServiceProvider extends ServiceProvider
         }
 
         if ($this->app->runningInConsole()) {
+            $this->commands([
+                ResetTwoFactorCommand::class,
+                RotateRememberTokensCommand::class,
+            ]);
+
             $this->publishes([
                 __DIR__.'/../config/orchid-2fa.php' => config_path('orchid-2fa.php'),
             ], 'orchid-2fa-config');
@@ -59,6 +67,8 @@ class Orchid2FAServiceProvider extends ServiceProvider
             $this->registerPermissions();
             $this->registerLoginRoute();
             $this->registerChallengeRoutes();
+            $this->registerProfileRoutes();
+            $this->registerMenu();
             $this->warnAboutMissingTrait();
         });
     }
@@ -140,10 +150,44 @@ class Orchid2FAServiceProvider extends ServiceProvider
         return 'throttle:'.$max.','.$minutes.',orchid-2fa';
     }
 
+    /**
+     * The two-factor profile screen in the private Orchid group (spec §4.7, §5.3).
+     */
+    protected function registerProfileRoutes(): void
+    {
+        if ($this->app->routesAreCached()) {
+            return;
+        }
+
+        Orchid::registerProfileScreen(
+            'profile/two-factor',
+            TwoFactorProfileScreen::class,
+            Orchid::profileTwoFactorRoute(),
+            static fn (): string => (string) __('orchid-2fa::messages.profile.title'),
+        );
+    }
+
+    /**
+     * The main menu item, only with `menu.enabled` (spec §4.7, §6): Orchid 14 has no profile menu.
+     */
+    protected function registerMenu(): void
+    {
+        if (! config('orchid-2fa.menu.enabled', false)) {
+            return;
+        }
+
+        Orchid::registerMenu(
+            (string) __('orchid-2fa::messages.profile.title'),
+            Orchid::profileTwoFactorRoute(),
+            'bs.shield-lock',
+        );
+    }
+
     protected function registerPermissions(): void
     {
         Orchid::registerPermissions((string) __('orchid-2fa::messages.permissions.group'), [
             Orchid::requiredPermission() => (string) __('orchid-2fa::messages.permissions.required'),
+            Orchid::resetPermission() => (string) __('orchid-2fa::messages.permissions.reset'),
         ]);
     }
 

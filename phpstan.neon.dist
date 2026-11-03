@@ -9,4 +9,6 @@ parameters:
         # The workbench user model is analysed only so that PHPStan analyses the HasTwoFactor trait
         # (traits are analysed in the context of the classes using them).
         - workbench/app/Models/User.php
+        # Likewise a minimal screen for the ResetsTwoFactor trait.
+        - tests/PHPStan/ResetsTwoFactorScreen.php
     tmpDir: build/phpstan

@@ -7,6 +7,7 @@ namespace Workbench\App\Orchid\Screens\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
+use Nakipelo\Orchid2FA\Layouts\TwoFactorProfileLinkLayout;
 use Orchid\Access\Impersonation;
 use Orchid\Screen\Action;
 use Orchid\Screen\Actions\Button;
@@ -95,6 +96,8 @@ class UserProfileScreen extends Screen
                         ->icon('bs.check-circle')
                         ->method('changePassword')
                 ),
+
+            TwoFactorProfileLinkLayout::class,
         ];
     }
 

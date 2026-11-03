@@ -4,15 +4,17 @@ declare(strict_types=1);
 
 namespace Nakipelo\Orchid2FA\Concerns;
 
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
+use Nakipelo\Orchid2FA\TwoFactorManager;
 
 /**
  * Add to the user model of the Orchid guard (`App\Models\User`).
  *
- * A password change invalidates the trusted devices of the user (spec §4.4, §5.5).
- * The e-mail change listener (§4.9) is added in a later stage.
+ * A password change invalidates the trusted devices of the user (spec §4.4, §5.5); an e-mail
+ * change sends a notice to the old address and makes the next login confirm the new one (§4.9).
  *
  * @mixin Model
  */
@@ -20,8 +22,9 @@ trait HasTwoFactor
 {
     /**
      * Any `save()` that changes the password (profile, UserEditScreen, password reset)
-     * invalidates the trusted device cookies. Mass updates through the query builder
-     * fire no model events.
+     * invalidates the trusted device cookies; any `save()` that changes the address
+     * (`channels.email.attribute`) is handled by TwoFactorManager::addressChanged().
+     * Mass updates through the query builder fire no model events.
      */
     public static function bootHasTwoFactor(): void
     {
@@ -30,6 +33,19 @@ trait HasTwoFactor
                 TwoFactorAuthentication::bumpTrustedDevicesVersionFor($user->getKey());
                 $user->unsetRelation('twoFactor');
             }
+        });
+
+        static::updated(static function (Model $user): void {
+            $attribute = (string) config('orchid-2fa.channels.email.attribute', 'email');
+
+            if (! $user instanceof Authenticatable || ! $user->wasChanged($attribute)) {
+                return;
+            }
+
+            $old = $user->getOriginal($attribute);
+
+            app(TwoFactorManager::class)->addressChanged($user, is_string($old) ? trim($old) : '');
+            $user->unsetRelation('twoFactor');
         });
     }
 

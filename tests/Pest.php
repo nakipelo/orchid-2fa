@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Notifications\AnonymousNotifiable;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
@@ -99,4 +101,31 @@ function tfCodeFromMail(RawMessage $message): string
     expect(preg_match('/Your verification code: (\d{6})/', $body, $match))->toBe(1);
 
     return $match[1];
+}
+
+/**
+ * Enforce CSRF verification, which Laravel skips in unit tests. The `web` group uses
+ * PreventRequestForgery on Laravel 13 and ValidateCsrfToken on Laravel 11–12.
+ */
+function tfEnforceCsrf(): void
+{
+    if (class_exists(PreventRequestForgery::class)) {
+        app()->bind(PreventRequestForgery::class, fn ($app) => new class($app, $app['encrypter']) extends PreventRequestForgery
+        {
+            protected function runningUnitTests()
+            {
+                return false;
+            }
+        });
+
+        return;
+    }
+
+    app()->bind(ValidateCsrfToken::class, fn ($app) => new class($app, $app['encrypter']) extends ValidateCsrfToken
+    {
+        protected function runningUnitTests()
+        {
+            return false;
+        }
+    });
 }

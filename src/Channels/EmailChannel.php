@@ -84,7 +84,17 @@ class EmailChannel implements TwoFactorChannel
             throw new DeliveryFailedException('The user has no e-mail address to send the two-factor code to.');
         }
 
-        $notification = $this->makeNotification($code, $expiresAt);
+        $this->notify($address, $this->makeNotification($code, $expiresAt));
+    }
+
+    /**
+     * Send a mail notification to an address: through the queue with `notification.queue`,
+     * synchronously otherwise. Also used for the e-mail change notice (spec §4.9, §5.8).
+     *
+     * @throws DeliveryFailedException
+     */
+    public function notify(string $address, Notification $notification): void
+    {
         $notifiable = (new AnonymousNotifiable)->route('mail', $address);
 
         try {
@@ -100,7 +110,7 @@ class EmailChannel implements TwoFactorChannel
 
             $this->notifications->sendNow($notifiable, $notification, ['mail']);
         } catch (Throwable $e) {
-            throw new DeliveryFailedException('The two-factor code could not be sent: '.$e->getMessage(), 0, $e);
+            throw new DeliveryFailedException('The notification could not be sent: '.$e->getMessage(), 0, $e);
         }
     }
 

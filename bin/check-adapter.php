@@ -7,6 +7,10 @@ declare(strict_types=1);
  * the `platform::` view namespace, `Orchid\` classes) may appear in src/ only
  * inside the adapter src/Support/Orchid.php.
  *
+ * Exception (spec §5.1, stage 4): the Orchid UI layer — src/Screens/ and src/Layouts/ —
+ * extends Orchid's Screen/Layout classes and builds fields and actions, so it may use
+ * `Orchid\` classes. `platform.` and `platform::` names are forbidden there as well.
+ *
  * Usage: php bin/check-adapter.php [src-dir]
  */
 
@@ -19,6 +23,11 @@ if ($root === false || ! is_dir($root)) {
 
 $adapter = $root.DIRECTORY_SEPARATOR.'Support'.DIRECTORY_SEPARATOR.'Orchid.php';
 $pattern = '/platform\.|platform::|Orchid\\\\/';
+$uiPattern = '/platform\.|platform::/';
+$uiDirs = [
+    $root.DIRECTORY_SEPARATOR.'Screens'.DIRECTORY_SEPARATOR,
+    $root.DIRECTORY_SEPARATOR.'Layouts'.DIRECTORY_SEPARATOR,
+];
 $violations = [];
 
 $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
@@ -29,11 +38,17 @@ foreach ($files as $file) {
         continue;
     }
 
+    $isUi = false;
+
+    foreach ($uiDirs as $dir) {
+        $isUi = $isUi || str_starts_with($file->getPathname(), $dir);
+    }
+
     foreach (file($file->getPathname()) ?: [] as $number => $line) {
         // The package's own namespace contains "Orchid2FA\", which is not Orchid.
         $line = str_replace('Orchid2FA\\', '', $line);
 
-        if (preg_match($pattern, $line) === 1) {
+        if (preg_match($isUi ? $uiPattern : $pattern, $line) === 1) {
             $violations[] = sprintf('%s:%d: %s', substr($file->getPathname(), strlen($root) + 1), $number + 1, trim($line));
         }
     }
@@ -44,4 +59,4 @@ if ($violations !== []) {
     exit(1);
 }
 
-fwrite(STDOUT, "OK: platform./platform::/Orchid\\ only in src/Support/Orchid.php\n");
+fwrite(STDOUT, "OK: platform./platform:: only in src/Support/Orchid.php, Orchid\\ also in src/Screens and src/Layouts\n");

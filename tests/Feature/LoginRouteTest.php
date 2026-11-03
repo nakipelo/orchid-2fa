@@ -107,4 +107,10 @@ PHP);
 
     assertLoginRoutes($this);
     assertPostReachesPackageController($this);
+
+    // The profile screen of stage 4 is cached as well, with the methods of the screen.
+    $profile = $this->app['router']->getRoutes()->getByName('platform.profile.two-factor');
+    expect($profile)->not->toBeNull()
+        ->and($profile->uri())->toBe('admin/profile/two-factor/{method?}')
+        ->and($profile->wheres['method'] ?? '')->toContain('sendDisableCode');
 });

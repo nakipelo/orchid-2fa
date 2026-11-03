@@ -227,6 +227,31 @@ class ChallengeManager
         return max(0, $availableIn);
     }
 
+    /**
+     * Annul the active code of the user (e-mail change, spec §4.9). The limits stay.
+     */
+    public function annul(Authenticatable $user): void
+    {
+        $this->codes->forget($user->getAuthIdentifier());
+    }
+
+    /**
+     * Annul the active code and clear the counters: wrong attempts of the code, the hourly
+     * send limit and the cooldown (reset by an administrator, spec §4.8).
+     */
+    public function clear(Authenticatable $user): void
+    {
+        $stored = $this->codes->get($user->getAuthIdentifier());
+
+        if ($stored !== null) {
+            $this->limiter->clear($this->attemptsKey($user, $stored->challengeId));
+        }
+
+        $this->codes->forget($user->getAuthIdentifier());
+        $this->limiter->clear($this->sendKey($user));
+        $this->limiter->clear($this->cooldownKey($user));
+    }
+
     public function codeLength(): int
     {
         return max(1, (int) $this->config->get('orchid-2fa.code.length', 6));

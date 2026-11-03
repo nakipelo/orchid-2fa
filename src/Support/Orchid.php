@@ -18,6 +18,8 @@ use Orchid\Platform\Dashboard;
 use Orchid\Platform\ItemPermission;
 use Orchid\Platform\Models\User as OrchidUser;
 use Orchid\Screen\Actions\Menu;
+use Orchid\Support\Facades\Toast;
+use Tabuna\Breadcrumbs\Trail;
 
 /**
  * Adapter to Orchid (orchid/platform 14.x).
@@ -38,6 +40,11 @@ final class Orchid
      * Permission that makes two-factor authentication mandatory for its holder (spec §8).
      */
     private const PERMISSION_REQUIRED = 'platform.2fa.required';
+
+    /**
+     * Permission to reset two-factor authentication of other users (spec §8).
+     */
+    private const PERMISSION_RESET = 'platform.systems.users.2fa-reset';
 
     /**
      * Full config key of an Orchid setting, e.g. `configKey('auth')` → `platform.auth`.
@@ -207,6 +214,10 @@ final class Orchid
 
     public static function registerMenu(string $name, string $route, ?string $icon = null, ?string $permission = null): void
     {
+        // Menu::route() resolves the URL right away; a route named after it was added (as
+        // `Route::screen(...)->name(...)` does) is found only after the name lookups are refreshed.
+        Route::getRoutes()->refreshNameLookups();
+
         $menu = Menu::make($name)->route($route);
 
         if ($icon !== null) {
@@ -268,6 +279,55 @@ final class Orchid
     public static function requiredPermission(): string
     {
         return self::PERMISSION_REQUIRED;
+    }
+
+    public static function resetPermission(): string
+    {
+        return self::PERMISSION_RESET;
+    }
+
+    /**
+     * The two-factor profile screen (spec §4.7, §5.3).
+     */
+    public static function profileTwoFactorRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'profile.two-factor';
+    }
+
+    /**
+     * Register a screen in the private Orchid route group (`Route::screen` macro of Orchid),
+     * with breadcrumbs "Home > Profile > {title}" (the profile step only if its route exists).
+     *
+     * @param  class-string  $screen
+     */
+    public static function registerProfileScreen(string $uri, string $screen, string $name, Closure $title): void
+    {
+        self::routeGroup(true, static function () use ($uri, $screen, $name, $title): void {
+            Route::screen($uri, $screen)
+                ->name(substr($name, strlen(self::ROUTE_NAME_PREFIX)))
+                ->breadcrumbs(static function (Trail $trail) use ($title): Trail {
+                    $trail->parent(self::ROUTE_NAME_PREFIX.'index');
+
+                    if (Route::has(self::profileRoute())) {
+                        $trail->push((string) __('Profile'), route(self::profileRoute()));
+                    }
+
+                    return $trail->push((string) $title());
+                });
+        });
+    }
+
+    /**
+     * Flash an Orchid toast (`info`, `success`, `warning`, `error`).
+     */
+    public static function toast(string $message, string $level = 'info'): void
+    {
+        match ($level) {
+            'success' => Toast::success($message),
+            'warning' => Toast::warning($message),
+            'error' => Toast::error($message),
+            default => Toast::info($message),
+        };
     }
 
     /**

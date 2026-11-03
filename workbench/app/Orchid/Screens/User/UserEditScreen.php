@@ -9,6 +9,8 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
+use Nakipelo\Orchid2FA\Concerns\ResetsTwoFactor;
+use Nakipelo\Orchid2FA\Layouts\TwoFactorResetLayout;
 use Orchid\Access\Impersonation;
 use Orchid\Screen\Action;
 use Orchid\Screen\Actions\Button;
@@ -24,6 +26,8 @@ use Workbench\App\Orchid\Layouts\User\UserRoleLayout;
 
 class UserEditScreen extends Screen
 {
+    use ResetsTwoFactor;
+
     /**
      * @var User
      */
@@ -143,6 +147,8 @@ class UserEditScreen extends Screen
                         ->canSee($this->user->exists)
                         ->method('save')
                 ),
+
+            TwoFactorResetLayout::class,
 
         ];
     }

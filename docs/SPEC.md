@@ -77,6 +77,7 @@
 Вход по remember-cookie Laravel (`viaRemember`) код не спрашивает. Remember-cookie выдаётся только в финальном входе, то есть после пройденного 2FA, если оно требуется. Чтобы это было верно и для cookie, выданных раньше:
 - при включении 2FA пользователю — добровольном (§4.7) и при создании записи принудительного пользователя на первом вызове (§4.2) — пакет ротирует его `remember_token` (`provider->updateRememberToken($user, Str::random(60))`); старые remember-cookie перестают работать;
 - для cookie, выданных до установки пакета, — `php artisan orchid-2fa:rotate-remember-tokens`: обнуляет `remember_token` у всех пользователей модели провайдера guard одним запросом, с подтверждением, `--force` его пропускает. Активные сессии не завершаются. В README — шаг «после установки выполните».
+- *Уточнение этапа 4:* команда обновляет запросом query builder без глобальных scope (`newQueryWithoutScopes()->toBase()`, `WHERE remember_token IS NOT NULL`), поэтому `updated_at` и события модели не затрагиваются; колонка — `getRememberTokenName()` модели. Отказ в подтверждении (и запуск без `--force` с `--no-interaction`) — код возврата 1, ничего не меняется.
 
 ### 4.6. Impersonation
 `Orchid\Access\Impersonation::loginAs()` / `logout()` работают через `loginUsingId` и маршрут логина не затрагивают, поэтому 2FA не спрашивается. Пакет в них не вмешивается. Тест фиксирует это поведение.
@@ -87,17 +88,25 @@
 - **Выключить**: доступно только добровольному и подтверждается кодом на текущий e-mail (тот же поток и лимиты, что при включении). Выставляет `enabled_at = null`, `confirmed_at = null` и инкрементирует `trusted_devices_version`. Принудительный пользователь видит статус «обязательно для вашей учётной записи» без кнопки выключения; сервер повторно проверяет `TwoFactorPolicy::isEnforced()` и отклоняет запрос на выключение (отправку кода и подтверждение) от принудительного пользователя.
 - **Выйти со всех доверенных устройств**: инкремент `trusted_devices_version`, кнопка доступна при любом статусе.
 - Принудительному пользователю запись в таблице создаётся лениво, при первом вызове (с ротацией `remember_token`, §4.5). `confirmed_at` выставляется при первом успешном коде.
+- *Уточнения этапа 4:*
+  - Методы экрана (Orchid, `POST profile/two-factor/{method}`): `sendEnableCode`, `enable`, `sendDisableCode`, `disable`, `cancelCode`, `forgetTrustedDevices`. GET с методом Orchid перенаправляет на экран, действие не выполняется; CSRF — штатный, группа `web`.
+  - Отправленный из профиля код запоминается в сессии (`orchid-2fa.profile`: `user_id`, `action` = `enable`/`disable`, `challenge_id`) и подтверждает только своё действие и только своего пользователя. Код другого вызова (например, входа в другой сессии) не принимается. «Отправить код повторно» на шаге кода — тот же `sendEnableCode`/`sendDisableCode`: новый код аннулирует прежний (код у пользователя один на вход и профиль, §5.9), действуют cooldown и часовой лимит. «Отмена» закрывает шаг кода, сам код не удаляется (как «войти под другим»).
+  - Неверный код — ошибка валидации на `code` с числом оставшихся попыток; код истёк, попытки исчерпаны или код не запрашивался — toast «код больше недействителен, запросите новый», шаг кода закрывается. Ошибка отправки и лимиты — toast с теми же текстами, что на экране кода.
+  - Принудительному пользователю сервер отвечает `403` и на выключение, и на включение (включение тоже только для добровольного). Устаревший запрос без принуждения (включить уже включённое, выключить невключённое) — toast-предупреждение без изменений.
+  - Событие `TwoFactorChallengeSent` с `context` `enable`/`disable`; `TwoFactorPassed` в профиле не порождается (это событие входа). Отдельных событий включения, выключения и сброса в v0.1 нет (§5.7).
 
 ### 4.8. Сброс администратором
 - `UserEditScreen`: Layout пакета с кнопкой «Сбросить 2FA». Видна при праве `platform.systems.users.2fa-reset`.
 - `php artisan orchid-2fa:reset {email}`: та же операция, с подтверждением; `--force` подтверждение пропускает.
 - Операция сброса: `enabled_at = null`, `confirmed_at = null`, инкремент `trusted_devices_version`, удаление активного кода и счётчиков. Для принудительного пользователя это значит, что следующий вход снова выдаст вызов на текущий e-mail. Это и есть аварийный доступ v0.1: администратор исправляет адрес в карточке пользователя и сбрасывает 2FA. Других обходов нет.
+- *Уточнения этапа 4:* «счётчики» — попытки ввода активного кода, часовой лимит отправок и cooldown (`ChallengeManager::clear()`), поэтому после сброса код уходит сразу. Нет записи — она не создаётся. Событий сброс не порождает (§5.7). Сигнатура метода трейта — `resetTwoFactor(TwoFactorManager $manager, mixed $user = null)`, а не `resetTwoFactor(User $user)`: трейт не знает класс модели приложения, а неявная привязка по абстрактному `Model` невозможна. `$user` — параметр маршрута `{user}` (модель при явной привязке или ключ; тогда пользователь берётся через провайдер guard). Право проверяется на сервере: без него `403`, неизвестный пользователь — `404`. Layout скрыт без права и для несохранённого пользователя (экран создания). Команда ищет пользователя через `retrieveByCredentials(['email' => …])` провайдера guard (как при входе); неизвестный e-mail — сообщение и код возврата 1; отказ в подтверждении — код 1.
 
 ### 4.9. Смена e-mail при включённом 2FA
 - Изменение `email` у модели (профиль, `UserEditScreen`, любой `save()`) ловит трейт `HasTwoFactor`.
 - На старый адрес уходит `TwoFactorEmailChangedNotification`. 2FA не выключается. `confirmed_at = null`, активный код аннулируется.
 - Следующий вход шлёт код на новый адрес. Успех подтверждает адрес (`confirmed_at = now()`).
 - Массовые `update()` через query builder событий модели не вызывают, и уведомление в этом случае не уходит (ограничение описано в README).
+- *Уточнения этапа 4:* слушатель реагирует на атрибут `channels.email.attribute`. Код аннулируется и `confirmed_at` обнуляется у любой существующей записи; уведомление уходит, только если 2FA пользователю требуется (принудительный или добровольный) и старый адрес не пуст. Запись не создаётся, `trusted_devices_version` не меняется: cookie доверия не действуют, пока `confirmed_at = null` (§5.6), и снова действуют после подтверждения нового адреса. Ошибка отправки уведомления пишется в лог (`error`, `log.channel`) и не срывает `save()`: адрес уже сохранён. Логика — `TwoFactorManager::addressChanged()`.
 - `UserProfileScreen::save` Orchid меняет e-mail без пароля. Пакет стаб не меняет: README рекомендует добавить в стаб подтверждение текущим паролем. Остаточный риск принят (§9).
 
 ### 4.10. Ошибка отправки (fail-closed)
@@ -128,6 +137,8 @@ src/
   TrustedDevice/TrustedDeviceCookie.php
   Http/Controllers/LoginController.php    POST platform.login.auth
   Http/Controllers/ChallengeController.php show/verify/resend/cancel
+  TwoFactorManager.php                    включение/выключение/сброс, смена e-mail, ротация remember_token
+  Challenge/ProfileChallenge.php          код, запрошенный в профиле (сессия `orchid-2fa.profile`)
   Screens/TwoFactorProfileScreen.php
   Layouts/TwoFactorProfileLinkLayout.php  ссылка на экран 2FA для UserProfileScreen
   Layouts/TwoFactorResetLayout.php
@@ -162,6 +173,11 @@ lang/{en,ru}/messages.php                  переводы, namespace orchid-2f
 | `guestMiddleware()` | `RedirectIfAuthenticated` с `redirectUsing(fn () => indexUrl())`, как в Orchid |
 | `registerPermissions(...)`, `registerMenu(...)` | `Dashboard::registerPermissions(ItemPermission)`, `Dashboard::registerMenuElement(Menu)` |
 | `loginRoutesEnabled()` | `config('platform.auth', true)` |
+| `resetPermission()`, `profileTwoFactorRoute()` | `platform.systems.users.2fa-reset`, `platform.profile.two-factor` |
+| `registerProfileScreen(...)` | `Route::screen()` в private-группе, хлебные крошки «Главная › Профиль › 2FA» |
+| `toast($message, $level)` | `Orchid\Support\Facades\Toast` |
+
+*Уточнение этапа 4 (UI-слой):* экраны и Layout'ы обязаны наследовать `Orchid\Screen\Screen` / `Orchid\Screen\Layouts\Block` и строить поля и действия классами Orchid, поэтому `src/Screens/` и `src/Layouts/` могут импортировать классы `Orchid\…`. Строки `platform.` и `platform::` (имена маршрутов, прав, конфига, view) запрещены и там — только через адаптер. Остальной `src/` (включая `Concerns/ResetsTwoFactor.php`) по-прежнему без `Orchid\`. Это проверяет `bin/check-adapter.php`. `registerMenu()` перед `Menu::route()` обновляет индекс имён маршрутов: `route()` вызывается сразу, а маршрут, получивший имя после добавления в коллекцию, без этого не находится.
 
 ### 5.2. Канал
 ```php
@@ -244,7 +260,7 @@ Throttle `verify`/`resend` регистрируется как `throttle:{max},{
 Кроме того, финальный вход порождает штатный `Illuminate\Auth\Events\Login`. `LogTwoFactorEvents` пишет все четыре события в `log.channel`, подписывается при `log.enabled`.
 
 ### 5.8. Уведомления
-`TwoFactorCodeNotification` (`mail`): код, срок, маскированного адреса нет, IP и user-agent не содержит. Класс задаётся в `notification.class` и должен принимать `(string $code, CarbonInterface $expiresAt)`. По умолчанию отправка синхронная (`Notification::sendNow`, даже если класс реализует `ShouldQueue`). При `notification.queue = true` `EmailChannel` сам ставит в очередь `SendQueuedNotifications` с `connection`/`queue_name` из конфига, поэтому класс не обязан реализовывать `ShouldQueue`. Письмо адресуется через `AnonymousNotifiable` на адрес из `channels.email.attribute`, трейт `Notifiable` у модели не нужен. Нет адреса → `DeliveryFailedException` (fail-closed, §4.10). `TwoFactorEmailChangedNotification` уходит через `Notification::route('mail', $old)` и тоже подменяется конфигом.
+`TwoFactorCodeNotification` (`mail`): код, срок, маскированного адреса нет, IP и user-agent не содержит. Класс задаётся в `notification.class` и должен принимать `(string $code, CarbonInterface $expiresAt)`. По умолчанию отправка синхронная (`Notification::sendNow`, даже если класс реализует `ShouldQueue`). При `notification.queue = true` `EmailChannel` сам ставит в очередь `SendQueuedNotifications` с `connection`/`queue_name` из конфига, поэтому класс не обязан реализовывать `ShouldQueue`. Письмо адресуется через `AnonymousNotifiable` на адрес из `channels.email.attribute`, трейт `Notifiable` у модели не нужен. Нет адреса → `DeliveryFailedException` (fail-closed, §4.10). `TwoFactorEmailChangedNotification` уходит через `Notification::route('mail', $old)` и тоже подменяется конфигом (`notification.email_changed_class`); класс должен принимать `(string $maskedNewAddress)`, новый адрес в письме только маскированный. *Уточнение этапа 4:* отправка — через `EmailChannel::notify()` с теми же `notification.queue`/`connection`/`queue_name`, что и письмо с кодом.
 
 ### 5.9. Код
 `random_int` на `code.length` цифр с ведущими нулями. В cache (`cache.store`) по ключу `orchid-2fa:code:{user_id}` лежит `{hash, challenge_id, destination_hash, expires_at}`, TTL `code.ttl`. `hash = hash_hmac('sha256', code.'|'.challenge_id, app.key)`, сравнение через `hash_equals`. Код действителен, только если `challenge_id` совпадает с pending и `destination_hash` — с текущим адресом. Попытки считаются в `RateLimiter` по ключу `orchid-2fa:verify:{user_id}:{challenge_id}`, отправки — `orchid-2fa:send:{user_id}` (час) и `orchid-2fa:cooldown:{user_id}`. Попытка засчитывается до сравнения, это закрывает параллельный перебор. Успешная проверка «забирает» код атомарно: `Cache::add('orchid-2fa:used:{user_id}:{challenge_id}')` (атомарен в штатных store Laravel, в отличие от `Cache::pull` = get + forget), затем запись удаляется; второй параллельный verify с тем же кодом получает отказ.
@@ -261,7 +277,8 @@ Throttle `verify`/`resend` регистрируется как `throttle:{max},{
 - **Экран профиля** `TwoFactorProfileScreen`: статус (выключено, включено, обязательно; адрес подтверждён или нет), действия из §4.7. Кнопки «Выключить» у принудительного пользователя нет.
 - **Ссылка из профиля** (обязательная): в `layout()` стаба `UserProfileScreen` добавляется `TwoFactorProfileLinkLayout::class` — одна строка, инструкция в README. Layout показывает статус 2FA и кнопку-ссылку на `platform.profile.two-factor`.
 - **Пункт основного меню** — опционально, `menu.enabled` (по умолчанию `false`), через `Orchid::registerMenu()`.
-- **Сброс в `UserEditScreen`**: в `layout()` добавляется `TwoFactorResetLayout::class`, на экран — `use ResetsTwoFactor;` (метод `resetTwoFactor(User $user)`). Инструкция в README: две строки в стабе.
+- **Сброс в `UserEditScreen`**: в `layout()` добавляется `TwoFactorResetLayout::class`, на экран — `use ResetsTwoFactor;` (метод `resetTwoFactor`, сигнатура — §4.8). Инструкция в README: две строки в стабе.
+- *Уточнение этапа 4:* оба Layout'а — `Block` в стиле стабов Orchid 14 (заголовок и описание слева, карточка со статусом справа, кнопки внизу). `TwoFactorResetLayout` берёт пользователя из `user` запроса экрана, показывает статус («обязательна», «включена пользователем», «выключена») и адрес (подтверждён или нет); кнопка «Сбросить 2FA» — с подтверждением. Экран профиля: блок статуса (кнопка «Включить» или «Выключить»), блок шага кода (поле `code` с `autocomplete="one-time-code"`, «Подтвердить», «Отправить код повторно», «Отмена»), блок «Доверенные устройства». Пункт меню при `menu.enabled` — «Двухфакторная аутентификация», иконка `bs.shield-lock`, без права.
 
 ## 7. Конфиг `config/orchid-2fa.php`
 
@@ -298,7 +315,7 @@ Throttle `verify`/`resend` регистрируется как `throttle:{max},{
 - `platform.2fa.required` — 2FA обязательна для владельца права;
 - `platform.systems.users.2fa-reset` — сброс 2FA другим пользователям (кнопка в `UserEditScreen`; artisan-команда права не проверяет).
 
-Регистрация — в `booted`, вместе с маршрутами. На этапе 2 регистрируется только `platform.2fa.required` (без неё `getAllowAllPermission()` его не содержит и администратор не становится принудительным); `platform.systems.users.2fa-reset` — на этапе 4 вместе с кнопкой сброса.
+Регистрация — в `booted`, вместе с маршрутами. На этапе 2 регистрируется только `platform.2fa.required` (без неё `getAllowAllPermission()` его не содержит и администратор не становится принудительным); `platform.systems.users.2fa-reset` — на этапе 4 вместе с кнопкой сброса (`orchid:admin` получает и его). Кнопке сброса нужен ещё и доступ к самому `UserEditScreen` (`platform.systems.users` в стабе).
 
 `orchid:admin` выдаёт пользователю `Dashboard::getAllowAllPermission()`, то есть и `platform.2fa.required`. Так и задумано: администраторы обязаны проходить 2FA, из «всех прав» право не исключается. В README: при первом входе администратору нужна рабочая почта, иначе вход восстанавливается только через `orchid-2fa:reset` после исправления адреса.
 
@@ -375,6 +392,7 @@ Throttle `verify`/`resend` регистрируется как `throttle:{max},{
 *Итог этапа 3:* реализовано (до ревью); тесты — `tests/Feature/Login/TrustedDeviceTest.php`, `tests/Feature/Unit/TrustedDeviceCookieTest.php`. Слушатель смены пароля в `HasTwoFactor` — на этом этапе; кнопка «Выйти со всех доверенных устройств», выключение и сброс (их инкременты) — этап 4, API инкремента готов (§5.5). Уточнения зафиксированы в §5.1, §5.5, §5.6, §9.
 
 **4. Профиль и администрирование.** `TwoFactorProfileScreen`, `TwoFactorProfileLinkLayout`, опция `menu.enabled`, выключение с кодом, ротация `remember_token`, `TwoFactorResetLayout` и `ResetsTwoFactor`, право сброса, `orchid-2fa:reset`, `orchid-2fa:rotate-remember-tokens`, смена e-mail.
+*Итог этапа 4:* реализовано (до ревью); тесты — `tests/Feature/Profile/*`, `tests/Feature/Admin/*`, `tests/Feature/EmailChangeTest.php`, `tests/MenuEnabled/*`, маршрут профиля после `route:cache` — в `tests/Feature/LoginRouteTest.php`. Уточнения зафиксированы в §4.5, §4.7–4.9, §5, §5.1, §5.8, §6, §8.
 *Готово, когда:* проходят сценарии §4.5, §4.7–4.9; `TwoFactorProfileLinkLayout` подключён в workbench-стаб `UserProfileScreen` одной строкой, Layout сброса — в стаб `UserEditScreen` двумя строками и работает только с правом; пункта меню нет по умолчанию и он есть при `menu.enabled`; принудительный пользователь не видит кнопку выключения и не может выключить 2FA прямым запросом; `orchid-2fa:reset` сбрасывает 2FA и возвращает ненулевой код для неизвестного e-mail; после `orchid-2fa:rotate-remember-tokens` старые remember-cookie не пускают.
 
 **5. Релиз.** README: установка, шаг «после установки выполните `orchid-2fa:rotate-remember-tokens`», трейт, Layout для `UserProfileScreen` (одна строка) и `UserEditScreen`, конфиг (`menu.enabled`), требования (Laravel от 11.35; L13 — только PHP 8.3+), ограничения и рекомендации: очередь, массовые update, вход в тот же guard мимо Orchid (Breeze/Fortify/свои маршруты) обходит 2FA, `platform.auth = false`, `orchid:admin` делает администратора принудительным — нужна рабочая почта, иначе только `orchid-2fa:reset`, смена e-mail в `UserProfileScreen` без пароля — добавить подтверждение паролем в стаб. Переводы en и ru (публикуемые, тег `orchid-2fa-translations`), CHANGELOG, тег `0.1.0`, Packagist.

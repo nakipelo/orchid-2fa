@@ -38,6 +38,28 @@ class TwoFactorPolicy
         return $this->isEnforced($user) || $this->isEnabled($user);
     }
 
+    /**
+     * The current address was confirmed with a code (spec §4.9).
+     */
+    public function isConfirmed(Authenticatable $user): bool
+    {
+        return $this->record($user)?->confirmed_at !== null;
+    }
+
+    /**
+     * Status shown in the UI (spec §6): `required` (enforced), `enabled` (voluntary) or `disabled`.
+     *
+     * @return 'required'|'enabled'|'disabled'
+     */
+    public function status(Authenticatable $user): string
+    {
+        return match (true) {
+            $this->isEnforced($user) => 'required',
+            $this->isEnabled($user) => 'enabled',
+            default => 'disabled',
+        };
+    }
+
     public function record(Authenticatable $user): ?TwoFactorAuthentication
     {
         return TwoFactorAuthentication::query()

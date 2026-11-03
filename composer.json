@@ -80,7 +80,7 @@
         "test": "Run the Pest test suite",
         "analyse": "Run Larastan (PHPStan level 8)",
         "lint": "Check code style with Pint (laravel preset)",
-        "check-adapter": "Fail if platform./platform::/Orchid\\ appear in src/ outside src/Support/Orchid.php",
+        "check-adapter": "Fail if platform./platform:: appear in src/ outside src/Support/Orchid.php, or Orchid\\ outside it and the UI layer (src/Screens, src/Layouts)",
         "check": "Run all checks: pint, adapter check, larastan, pest"
     }
 }
