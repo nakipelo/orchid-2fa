@@ -230,7 +230,7 @@ Throttle `verify`/`resend` регистрируется как `throttle:{max},{
 | `trusted_devices_version` | unsignedInteger, default 1 |
 | `created_at`, `updated_at` | timestamps |
 
-Миграция грузится через `loadMigrationsFrom` и публикуется (тег `orchid-2fa-migrations`). Колонок в `users` пакет не добавляет. Тип FK соответствует `users.id` Orchid/Laravel (bigint). Нестандартный ключ решается правкой опубликованной миграции.
+Миграция грузится через `loadMigrationsFrom` и публикуется (тег `orchid-2fa-migrations`). *Уточнение этапа 5:* публикуется через `publishes()`, а не `publishesMigrations()`: копия сохраняет имя файла и замещает миграцию пакета (мигратор ключует файлы по имени), иначе копия с новой датой и миграция пакета выполнялись бы обе и вторая падала на существующей таблице. Колонок в `users` пакет не добавляет. Тип FK соответствует `users.id` Orchid/Laravel (bigint). Нестандартный ключ решается правкой опубликованной миграции.
 
 Трейт `HasTwoFactor` для `App\Models\User`:
 - `twoFactor(): HasOne`;

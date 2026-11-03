@@ -15,7 +15,8 @@ return [
     |
     | When true, two-factor authentication is required for every user of the
     | admin panel. Otherwise it is required for users holding the
-    | "2fa.required" permission and for users who enabled it in their profile.
+    | "platform.2fa.required" permission and for users who enabled it in their
+    | profile.
     |
     */
 

@@ -1,14 +1,30 @@
 {
     "name": "nakipelo/orchid-2fa",
-    "description": "Two-factor authentication (e-mail one-time code) for the Laravel Orchid admin panel login.",
+    "description": "Two-factor authentication for the Laravel Orchid admin panel: a one-time code by e-mail at password login, trusted devices, profile screen and admin reset.",
     "type": "library",
     "license": "MIT",
+    "homepage": "https://github.com/nakipelo/orchid-2fa",
+    "support": {
+        "issues": "https://github.com/nakipelo/orchid-2fa/issues",
+        "source": "https://github.com/nakipelo/orchid-2fa"
+    },
+    "authors": [
+        {
+            "name": "nakipelo",
+            "homepage": "https://github.com/nakipelo"
+        }
+    ],
     "keywords": [
         "laravel",
         "orchid",
+        "orchid-platform",
         "2fa",
         "two-factor",
-        "authentication"
+        "two-factor-authentication",
+        "otp",
+        "email",
+        "authentication",
+        "security"
     ],
     "require": {
         "php": "^8.2",

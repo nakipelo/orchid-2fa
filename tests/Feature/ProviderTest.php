@@ -57,3 +57,38 @@ it('registers publish tags', function () {
     expect(ServiceProvider::pathsToPublish(Orchid2FAServiceProvider::class, 'orchid-2fa-config'))->toHaveCount(1)
         ->and(ServiceProvider::pathsToPublish(Orchid2FAServiceProvider::class, 'orchid-2fa-migrations'))->toHaveCount(1);
 });
+
+it('registers the translations tag', function () {
+    $paths = ServiceProvider::pathsToPublish(Orchid2FAServiceProvider::class, 'orchid-2fa-translations');
+
+    expect($paths)->toHaveCount(1)
+        ->and(array_values($paths)[0])->toBe(app()->langPath('vendor/orchid-2fa'));
+});
+
+it('publishes the migration under its own name, so the copy replaces the package file', function () {
+    $source = realpath(dirname(__DIR__, 2).'/database/migrations');
+
+    $paths = ServiceProvider::pathsToPublish(Orchid2FAServiceProvider::class, 'orchid-2fa-migrations');
+
+    // publishesMigrations() would register the path here and rename the copy with a new timestamp.
+    expect(array_map('realpath', array_keys($paths)))->toBe([$source])
+        ->and(array_values($paths))->toBe([database_path('migrations')])
+        ->and(array_map('realpath', ServiceProvider::publishableMigrationPaths()))->not->toContain($source);
+
+    $copy = sys_get_temp_dir().'/orchid-2fa-migrations-'.uniqid();
+    mkdir($copy);
+
+    try {
+        foreach (glob($source.'/*.php') ?: [] as $file) {
+            copy($file, $copy.'/'.basename($file));
+        }
+
+        $files = app('migrator')->getMigrationFiles([$source, $copy]);
+
+        expect($files)->toHaveCount(1)
+            ->and(dirname((string) reset($files)))->toBe($copy);
+    } finally {
+        array_map('unlink', glob($copy.'/*.php') ?: []);
+        rmdir($copy);
+    }
+});

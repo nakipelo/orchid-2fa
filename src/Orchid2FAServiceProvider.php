@@ -46,7 +46,11 @@ class Orchid2FAServiceProvider extends ServiceProvider
                 __DIR__.'/../config/orchid-2fa.php' => config_path('orchid-2fa.php'),
             ], 'orchid-2fa-config');
 
-            $this->publishesMigrations([
+            // Not publishesMigrations(): it renames the copy with the current timestamp, and the
+            // migrator, which also loads the package's own file (loadMigrationsFrom), would run
+            // both and fail on the existing table. Under the same name the published copy
+            // replaces the package's file (migrations are keyed by name, the app's path wins).
+            $this->publishes([
                 __DIR__.'/../database/migrations' => database_path('migrations'),
             ], 'orchid-2fa-migrations');
 
