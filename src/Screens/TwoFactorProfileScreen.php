@@ -38,13 +38,15 @@ use Orchid\Support\Facades\Layout;
  * Two-factor settings of the signed-in user (route `Orchid::profileTwoFactorRoute()`, spec §4.7,
  * §6; 0.2 §5.5–§5.9, §6.3).
  *
- * - Enabling (status `disabled`, or `not_enrolled`): enrollment of an allowed method; e-mail —
- *   a code to the address.
+ * - Enabling (status `disabled`, or `not_enrolled`): enrollment of an allowed method (only of the
+ *   user's own channel while its binding is left), confirmed with the current password and the
+ *   first code; e-mail — a code to the address.
  * - Switching, rebinding, disabling and regenerating the recovery codes are confirmed with the
  *   current password and a code of the current method (or a recovery code: not for regenerating)
  *   in one form; a wrong password counts like a wrong code. The confirmation lives
  *   `profile.confirmation_ttl` and is bound to the user, the action and the target channel.
  * - An enforced user cannot disable (403 on the server).
+ * - The driver of the recorded method is gone: every change but enabling is refused with a toast.
  */
 class TwoFactorProfileScreen extends Screen
 {
@@ -157,7 +159,9 @@ class TwoFactorProfileScreen extends Screen
             'stepLabel' => $step?->label() ?? '',
             'enrollmentView' => $enrollmentView,
             'enrollmentData' => $enrollmentData,
-            'choices' => $this->choicesFor($channels, $active ? $current : null, ! $active),
+            'choices' => ! $active && ($bound = $this->boundChannel($method)) !== null
+                ? [$bound->name() => $bound->label()]
+                : $this->choicesFor($channels, $active ? $current : null, ! $active),
             'canRebind' => $active && $method->state === UserMethod::ACTIVE && $current?->enrollmentView() !== null,
             'hasRecoveryCodes' => $hasCodes,
             'recoveryRemaining' => $remaining,
@@ -272,6 +276,14 @@ class TwoFactorProfileScreen extends Screen
                 ->canSee($enrolling && $this->enrollmentView !== null),
 
             Layout::block(Layout::rows([
+                // Enabling is confirmed with the current password like the other changes (§5.5);
+                // a switch or a rebind had it at the confirmation with the current method.
+                Password::make('password')
+                    ->title($this->trans('profile.password'))
+                    ->autocomplete('current-password')
+                    ->required()
+                    ->canSee($action === ProfileChallenge::ENABLE),
+
                 Input::make('code')
                     ->title($this->trans('challenge.code'))
                     ->help($this->stepIsDelivery ? $this->stepPrompt : $this->trans('profile.enroll_code_help', ['method' => $this->stepLabel]))
@@ -547,6 +559,7 @@ class TwoFactorProfileScreen extends Screen
         $method = $channels->methodFor($user);
 
         // Without a choice: the user's own allowed method, the only allowed one, the default one.
+        // A leftover binding limits "Enable" to its channel (authorizeAction()).
         $name = match (true) {
             is_string($name) && $name !== '' => $name,
             $method->state === UserMethod::ACTIVE && $method->channel !== null => $method->channel->name(),
@@ -736,9 +749,21 @@ class TwoFactorProfileScreen extends Screen
             return;
         }
 
-        $request->validate(['code' => 'required|string|max:64']);
+        $request->validate(['code' => 'required|string|max:64'] + ($action === ProfileChallenge::ENABLE ? ['password' => 'required|string|max:1024'] : []));
 
         $target = $channels->channel($state->channel);
+
+        // Enabling: the current password first (spec 0.2 §5.5, as §5.6 item 6). A wrong one counts
+        // against the counters of the step like a wrong code; the code is not checked.
+        if ($action === ProfileChallenge::ENABLE
+            && ! Orchid::guard()->getProvider()->validateCredentials($user, ['password' => (string) $request->input('password')])) {
+            $challenge = $challenges->enrollmentChallenge($target, $state);
+            $result = $challenges->rejectAttempt($user, $challenge, ! $target->requiresDelivery());
+            $this->refused($request, $challenges, $user, $challenge, $result, 'password', ! $target->requiresDelivery());
+
+            return;
+        }
+
         $result = $challenges->confirmEnrollment($user, $target, $state, (string) $request->input('code'));
 
         if ($result !== VerificationResult::Passed) {
@@ -784,8 +809,20 @@ class TwoFactorProfileScreen extends Screen
             abort(403, $this->trans('profile.enforced'));
         }
 
+        // The driver of the recorded method is gone (spec 0.2 §4.5 item 3): nothing can confirm a
+        // change, fail closed; only enabling another method stays (a user with 2FA disabled).
+        if ($method->state === UserMethod::UNAVAILABLE && $action !== ProfileChallenge::ENABLE) {
+            $this->forgetPending($request);
+            Orchid::toast($this->trans('errors.channel_unavailable'), 'error');
+
+            return false;
+        }
+
+        $bound = $this->boundChannel($method);
+
         $allowed = match ($action) {
-            ProfileChallenge::ENABLE => in_array($status, ['disabled', 'not_enrolled'], true) && ($target === null || $channels->isAllowed($target)),
+            ProfileChallenge::ENABLE => in_array($status, ['disabled', 'not_enrolled'], true) && ($target === null || $channels->isAllowed($target))
+                && ($bound === null || $target === null || $target === $bound->name()),
             ProfileChallenge::DISABLE => $status === 'enabled',
             // A missing target (no pending change) is refused later as an expired confirmation.
             ProfileChallenge::SWITCH => $active && $current !== null && ($target === null || ($target !== $current->name() && $channels->isAllowed($target))),
@@ -808,6 +845,21 @@ class TwoFactorProfileScreen extends Screen
         }), 'warning');
 
         return false;
+    }
+
+    /**
+     * The channel "Enable" is limited to (spec 0.2 §5.5, review of 0.2.0): the user's own enrolled
+     * and allowed method that keeps data of its driver (a verifier channel, or a delivery one with an
+     * enrollment step), left e.g. after the "2FA required" permission was taken away. Enabling another
+     * channel would erase that binding without its proof; enabling it again is a new enrollment of the
+     * same channel. Null — no such binding.
+     */
+    protected function boundChannel(UserMethod $method): ?TwoFactorChannel
+    {
+        $channel = $method->channel;
+
+        return $method->state === UserMethod::ACTIVE && $channel !== null && $method->recorded === $channel->name()
+            && (! $channel->requiresDelivery() || $channel->enrollmentView() !== null) ? $channel : null;
     }
 
     protected function forgetPending(Request $request): void

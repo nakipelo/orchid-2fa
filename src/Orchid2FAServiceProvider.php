@@ -18,6 +18,7 @@ use Nakipelo\Orchid2FA\Exceptions\UnsupportedGuardException;
 use Nakipelo\Orchid2FA\Http\Controllers\ChallengeController;
 use Nakipelo\Orchid2FA\Http\Controllers\EnrollmentController;
 use Nakipelo\Orchid2FA\Http\Controllers\LoginController;
+use Nakipelo\Orchid2FA\Http\Middleware\ThrottleProfileActions;
 use Nakipelo\Orchid2FA\Listeners\LogTwoFactorEvents;
 use Nakipelo\Orchid2FA\Screens\TwoFactorProfileScreen;
 use Nakipelo\Orchid2FA\Support\Orchid;
@@ -218,16 +219,26 @@ class Orchid2FAServiceProvider extends ServiceProvider
      */
     protected function challengeThrottle(): string
     {
-        $parts = array_map('trim', explode(',', (string) config('orchid-2fa.routes.throttle', '10,1')));
-
-        $max = $parts[0] !== '' ? $parts[0] : '10';
-        $minutes = ($parts[1] ?? '') !== '' ? $parts[1] : '1';
-
-        return 'throttle:'.$max.','.$minutes.',orchid-2fa';
+        return 'throttle:'.$this->throttleParameters('routes.throttle', '10,1').',orchid-2fa';
     }
 
     /**
-     * The two-factor profile screen in the private Orchid group (spec §4.7, §5.3).
+     * "max,minutes" of a throttle config key, the default for a missing part.
+     */
+    protected function throttleParameters(string $key, string $default): string
+    {
+        [$defaultMax, $defaultMinutes] = explode(',', $default);
+        $parts = array_map('trim', explode(',', (string) config('orchid-2fa.'.$key, $default)));
+
+        $max = $parts[0] !== '' ? $parts[0] : $defaultMax;
+        $minutes = ($parts[1] ?? '') !== '' ? $parts[1] : $defaultMinutes;
+
+        return $max.','.$minutes;
+    }
+
+    /**
+     * The two-factor profile screen in the private Orchid group (spec §4.7, §5.3); its actions are
+     * throttled per user by `routes.profile_throttle` (spec 0.2 §6.4).
      */
     protected function registerProfileRoutes(): void
     {
@@ -240,6 +251,7 @@ class Orchid2FAServiceProvider extends ServiceProvider
             TwoFactorProfileScreen::class,
             Orchid::profileTwoFactorRoute(),
             static fn (): string => (string) __('orchid-2fa::messages.profile.title'),
+            [ThrottleProfileActions::class.':'.$this->throttleParameters('routes.profile_throttle', '30,1').',orchid-2fa-profile'],
         );
     }
 

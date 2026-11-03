@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace Nakipelo\Orchid2FA\Testing\Concerns;
 
+use Nakipelo\Orchid2FA\Challenge\Context;
 use Nakipelo\Orchid2FA\Challenge\EnrollmentState;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
+use Nakipelo\Orchid2FA\Support\Orchid;
 use Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase;
+use Stringable;
 
 /**
- * No codes or secrets in the logs and the events (spec 0.2 §8, §9).
+ * No codes or secrets in the logs and the events (spec 0.2 §8, §9), also while the enrollment step
+ * is shown: the string values of enrollmentData() (at least 8 characters: a secret, a key, an URI)
+ * must not reach the log.
  *
  * @mixin ChannelConformanceTestCase
  */
@@ -30,8 +34,32 @@ trait TestsSecrets
         $this->verifyCode($code);
 
         $other = $this->makeUser('enroll@example.com');
-        $state = EnrollmentState::start($this->application()->make('session.store'), $other, $this->channelName(), TwoFactorChallengeSent::CONTEXT_ENROLL);
-        $this->challenges()->startEnrollment($other, $this->channel(), $state);
+        $session = $this->application()->make('session.store');
+
+        if ($this->isDelivery() && $this->channel()->enrollmentView() === null) {
+            // The default delivery channel has no enrollment step at the login.
+            $state = EnrollmentState::start($session, $other, $this->channelName(), Context::ENROLL);
+            $this->challenges()->startEnrollment($other, $this->channel(), $state);
+        } else {
+            // The step as the user sees it: the partial gets enrollmentData().
+            $this->newBrowser();
+            $this->login($other);
+            $this->get(route(Orchid::enrollRoute(), ['channel' => $this->channelName()]))->assertOk();
+            $state = EnrollmentState::fromSession($session, $other, $this->channelName(), Context::ENROLL, 900)
+                ?? $this->fail('The enrollment step did not start.');
+        }
+
+        $shown = [];
+        $data = $this->channel()->enrollmentData($other, $state);
+        array_walk_recursive(
+            $data,
+            static function (mixed $value) use (&$shown): void {
+                if (is_string($value) || $value instanceof Stringable) {
+                    $shown[] = (string) $value;
+                }
+            },
+        );
+
         $enrollmentCode = $this->completeEnrollmentCode($other, $state);
         $this->challenges()->confirmEnrollment($other, $this->channel(), $state, $enrollmentCode);
 
@@ -47,6 +75,10 @@ trait TestsSecrets
             foreach ($payloads as $payload) {
                 $this->assertStringNotContainsString($secret, $payload);
             }
+        }
+
+        foreach (array_filter($shown, static fn (string $value): bool => strlen($value) >= 8) as $value) {
+            $this->assertStringNotContainsString($value, $logs, 'A value of enrollmentData() reached the log.');
         }
     }
 }

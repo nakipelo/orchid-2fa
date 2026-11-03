@@ -117,3 +117,43 @@ it('accepts a logger for the check', function () {
 
     app(ChannelRegistry::class)->check(true, $logger);
 });
+
+it('throws in local/testing when an allowed driver cannot be created', function () {
+    config([
+        'orchid-2fa.channels.allowed' => ['email', 'plain'],
+        'orchid-2fa.channels.plain.driver' => stdClass::class,
+    ]);
+
+    expect(fn () => app(ChannelRegistry::class)->check(true, app('log')->channel()))
+        ->toThrow(InvalidArgumentException::class, 'the two-factor channel [plain] in [orchid-2fa.channels.allowed] cannot be created');
+
+    TwoFactor::extend('closure', fn () => new stdClass);
+    config(['orchid-2fa.channels.allowed' => ['email', 'closure']]);
+
+    expect(fn () => app(ChannelRegistry::class)->check(true, app('log')->channel()))
+        ->toThrow(InvalidArgumentException::class, '[closure] in [orchid-2fa.channels.allowed] cannot be created');
+});
+
+it('ignores an allowed driver that cannot be created elsewhere, with a warning and without an error page', function () {
+    config([
+        'orchid-2fa.channels.allowed' => ['plain', 'email'],
+        'orchid-2fa.channels.plain.driver' => stdClass::class,
+    ]);
+    $this->logHandler()->reset();
+
+    app(ChannelRegistry::class)->check(false, app('log')->channel());
+
+    expect($this->logHandler()->hasWarningThatContains('the two-factor channel [plain] in [orchid-2fa.channels.allowed] cannot be created'))->toBeTrue()
+        ->and(TwoFactor::allowed())->toBe(['email'])
+        ->and(TwoFactor::ignored())->toBe(['plain']);
+
+    // The users go on with the allowed e-mail; a user of the broken channel fails closed.
+    tfEnforcedUser();
+    tfLogin()->assertRedirect(route('platform.two-factor.challenge'));
+
+    $this->newBrowser();
+    $broken = tfEnforcedUser('broken@example.com');
+    TwoFactorAuthentication::query()->create(['user_id' => $broken->id, 'channel' => 'plain', 'confirmed_at' => now()]);
+    tfLogin('broken@example.com')->assertRedirect('/admin/login')
+        ->assertSessionHasErrors(['email' => 'Your sign-in method is not available. Please contact your administrator.']);
+});

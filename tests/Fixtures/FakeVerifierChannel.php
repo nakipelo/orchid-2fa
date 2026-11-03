@@ -37,6 +37,18 @@ class FakeVerifierChannel extends VerifierChannel
     public static ?\Throwable $failWith = null;
 
     /**
+     * Thrown by confirmEnrollment() when set.
+     */
+    public static ?\Throwable $failEnrollmentWith = null;
+
+    /**
+     * Secrets of the next enrollment steps, in this order (then random again).
+     *
+     * @var list<string>
+     */
+    public static array $enrollmentSecrets = [];
+
+    /**
      * Called once between the read and the write of verifyCode() (the race test of the conformance
      * suite, ChannelConformanceTestCase::racingChannel()).
      */
@@ -46,6 +58,8 @@ class FakeVerifierChannel extends VerifierChannel
     {
         self::$emailFallback = false;
         self::$failWith = null;
+        self::$failEnrollmentWith = null;
+        self::$enrollmentSecrets = [];
 
         TwoFactor::extend('fake', fn () => new self);
     }
@@ -112,11 +126,15 @@ class FakeVerifierChannel extends VerifierChannel
 
     public function startEnrollment(Authenticatable $user, EnrollmentState $state): void
     {
-        $state->put('secret', Str::random(32));
+        $state->put('secret', array_shift(self::$enrollmentSecrets) ?? Str::random(32));
     }
 
     public function confirmEnrollment(Authenticatable $user, EnrollmentState $state, string $code): VerificationResult
     {
+        if (self::$failEnrollmentWith !== null) {
+            throw self::$failEnrollmentWith;
+        }
+
         $secret = $state->get('secret');
 
         if (! is_string($secret)) {

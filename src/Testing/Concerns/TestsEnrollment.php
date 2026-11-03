@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Nakipelo\Orchid2FA\Testing\Concerns;
 
+use Nakipelo\Orchid2FA\Challenge\Context;
 use Nakipelo\Orchid2FA\Challenge\EnrollmentState;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Support\Orchid;
 use Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase;
@@ -22,10 +22,10 @@ trait TestsEnrollment
     public function test_a_wrong_enrollment_code_stores_nothing(): void
     {
         $user = $this->makeUser();
-        $state = EnrollmentState::start($this->application()->make('session.store'), $user, $this->channelName(), TwoFactorChallengeSent::CONTEXT_ENROLL);
+        $state = EnrollmentState::start($this->application()->make('session.store'), $user, $this->channelName(), Context::ENROLL);
         $this->challenges()->startEnrollment($user, $this->channel(), $state);
 
-        $result = $this->challenges()->confirmEnrollment($user, $this->channel(), $state, $this->invalidCode($user));
+        $result = $this->challenges()->confirmEnrollment($user, $this->channel(), $state, $this->invalidCode($user, $state));
 
         $this->assertSame(VerificationResult::Invalid, $result);
 
@@ -46,12 +46,12 @@ trait TestsEnrollment
     {
         $user = $this->makeUser();
         $session = $this->application()->make('session.store');
-        $state = EnrollmentState::start($session, $user, $this->channelName(), TwoFactorChallengeSent::CONTEXT_ENROLL);
+        $state = EnrollmentState::start($session, $user, $this->channelName(), Context::ENROLL);
         $this->challenges()->startEnrollment($user, $this->channel(), $state);
 
         EnrollmentState::forget($session);
 
-        $this->assertNull(EnrollmentState::fromSession($session, $user, $this->channelName(), TwoFactorChallengeSent::CONTEXT_ENROLL, 900));
+        $this->assertNull(EnrollmentState::fromSession($session, $user, $this->channelName(), Context::ENROLL, 900));
         $this->assertNull($session->get(EnrollmentState::SESSION_KEY));
     }
 
@@ -65,7 +65,7 @@ trait TestsEnrollment
         $this->login($user)->assertRedirect(route(Orchid::enrollRoute()));
 
         $this->get(route(Orchid::enrollRoute(), ['channel' => $this->channelName()]))->assertOk();
-        $state = EnrollmentState::fromSession($this->application()->make('session.store'), $user, $this->channelName(), TwoFactorChallengeSent::CONTEXT_ENROLL, 900);
+        $state = EnrollmentState::fromSession($this->application()->make('session.store'), $user, $this->channelName(), Context::ENROLL, 900);
         $this->assertNotNull($state);
 
         $response = $this->post(route(Orchid::enrollConfirmRoute(), ['channel' => $this->channelName()]), [

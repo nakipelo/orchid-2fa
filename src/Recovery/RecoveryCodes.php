@@ -65,7 +65,7 @@ class RecoveryCodes
      * Consume the code if it is one of the unused codes of the user. Input is case-insensitive,
      * spaces and dashes are ignored. Only the first of parallel requests consumes a code.
      */
-    public function consume(Authenticatable $user, string $code): bool
+    public function consume(Authenticatable $user, #[\SensitiveParameter] string $code): bool
     {
         $code = $this->normalize($code);
 
@@ -95,7 +95,7 @@ class RecoveryCodes
      *
      * @param  list<string>  $codes
      */
-    public static function keepForDisplay(Session $session, Authenticatable $user, array $codes): void
+    public static function keepForDisplay(Session $session, Authenticatable $user, #[\SensitiveParameter] array $codes): void
     {
         $session->put(self::SESSION_KEY, ['user_id' => $user->getAuthIdentifier(), 'codes' => $codes]);
     }
@@ -167,7 +167,7 @@ class RecoveryCodes
         return substr($code, 0, 4).'-'.substr($code, 4);
     }
 
-    protected function normalize(string $code): string
+    protected function normalize(#[\SensitiveParameter] string $code): string
     {
         return mb_strtolower((string) preg_replace('/[\s-]+/u', '', $code));
     }

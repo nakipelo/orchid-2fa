@@ -96,9 +96,11 @@ abstract class ChannelConformanceTestCase extends TestCase
     abstract protected function validCode(User $user): string;
 
     /**
-     * A code the channel refuses for the user now.
+     * A code the channel refuses for the user now. `$state` is the enrollment step the code is for
+     * (null — a code of the login or of the enrolled method): exclude the codes the step accepts too,
+     * e.g. those of the secret in the state.
      */
-    abstract protected function invalidCode(User $user): string;
+    abstract protected function invalidCode(User $user, ?EnrollmentState $state = null): string;
 
     /**
      * Move to the next code window, so that validCode() returns a new code (a verifier channel
@@ -118,9 +120,10 @@ abstract class ChannelConformanceTestCase extends TestCase
      * same code through the registry inside `$between`, i.e. a second request runs entirely between the
      * read and the write of the first, and exactly one of them must pass (spec 0.2 §4.2, §9 "Replay").
      *
-     * The default null skips that test: the suite cannot reach inside verifyCode(). A verifier driver
-     * overrides it with a subclass that runs the callback at that point (here the driver reads the
-     * row in a method `matchingStep()` and writes it right after), for example:
+     * The suite cannot reach inside verifyCode(), so a verifier driver must override it (with the
+     * default null the test fails with "Override racingChannel() or skipsRaceTest()"): a subclass that
+     * runs the callback at that point (here the driver reads the row in a method `matchingStep()` and
+     * writes it right after), for example:
      *
      *     protected function racingChannel(Closure $between): ?VerifierChannel
      *     {
@@ -154,6 +157,17 @@ abstract class ChannelConformanceTestCase extends TestCase
     protected function racingChannel(Closure $between): ?VerifierChannel
     {
         return null;
+    }
+
+    /**
+     * An explicit opt-out of the race test for a verifier driver that cannot offer racingChannel()
+     * (e.g. the read and the write are one statement of an external service): the test is skipped
+     * instead of failing. The driver then has to prove the atomicity of its replay protection with
+     * its own tests (spec 0.2 §9 "Replay").
+     */
+    protected function skipsRaceTest(): bool
+    {
+        return false;
     }
 
     protected function setUp(): void

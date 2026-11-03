@@ -5,29 +5,32 @@ declare(strict_types=1);
 namespace Nakipelo\Orchid2FA\Events;
 
 use Illuminate\Contracts\Auth\Authenticatable;
+use Nakipelo\Orchid2FA\Challenge\Context;
 
 /**
  * A code was issued and handed over to a delivery channel (a verifier channel sends nothing,
- * spec 0.2 §4.6).
+ * spec 0.2 §4.6). `context` — why the code was issued (Challenge\Context).
  */
 final class TwoFactorChallengeSent extends TwoFactorEvent
 {
-    public const CONTEXT_LOGIN = 'login';
+    /**
+     * @deprecated 0.2 Use Challenge\Context::LOGIN; removed in 0.3.
+     */
+    public const CONTEXT_LOGIN = Context::LOGIN;
 
-    public const CONTEXT_ENABLE = 'enable';
+    /**
+     * @deprecated 0.2 Use Challenge\Context::ENABLE; removed in 0.3.
+     */
+    public const CONTEXT_ENABLE = Context::ENABLE;
 
-    public const CONTEXT_DISABLE = 'disable';
+    /**
+     * @deprecated 0.2 Use Challenge\Context::DISABLE; removed in 0.3.
+     */
+    public const CONTEXT_DISABLE = Context::DISABLE;
 
-    public const CONTEXT_SWITCH = 'switch';
-
-    public const CONTEXT_REBIND = 'rebind';
-
-    public const CONTEXT_REGENERATE = 'regenerate';
-
-    public const CONTEXT_ENROLL = 'enroll';
-
-    public const CONTEXT_FALLBACK = 'fallback';
-
+    /**
+     * @param  string  $context  a Challenge\Context value
+     */
     public function __construct(
         Authenticatable $user,
         string $guard,

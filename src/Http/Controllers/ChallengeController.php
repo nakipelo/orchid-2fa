@@ -15,13 +15,13 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Nakipelo\Orchid2FA\Challenge\Challenge;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
+use Nakipelo\Orchid2FA\Challenge\Context;
 use Nakipelo\Orchid2FA\Challenge\PendingLogin;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
 use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
 use Nakipelo\Orchid2FA\Channels\DeliveryChannel;
 use Nakipelo\Orchid2FA\Channels\UserMethod;
 use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Events\TwoFactorPassed;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
 use Nakipelo\Orchid2FA\Exceptions\SendLimitExceededException;
@@ -163,8 +163,8 @@ class ChallengeController
         // After an e-mail fallback the pending challenge is the e-mail one; the recovery code
         // belongs to the user's method.
         $method = $this->channels->for($user);
-        $challenge = $pending->context === TwoFactorChallengeSent::CONTEXT_FALLBACK && $method !== null
-            ? new Challenge($pending->challengeId, $method->name(), TwoFactorChallengeSent::CONTEXT_LOGIN)
+        $challenge = $pending->context === Context::FALLBACK && $method !== null
+            ? new Challenge($pending->challengeId, $method->name(), Context::LOGIN)
             : $pending->challenge();
 
         $result = $this->challenges->verifyRecoveryCode($user, $challenge, (string) $request->input('recovery_code'));
@@ -204,7 +204,7 @@ class ChallengeController
             return $this->sendError($request, $this->trans('errors.fallback_unavailable'));
         }
 
-        return $this->sendCode($request, $user, $pending, $email, TwoFactorChallengeSent::CONTEXT_FALLBACK, 'challenge.fallback_sent');
+        return $this->sendCode($request, $user, $pending, $email, Context::FALLBACK, 'challenge.fallback_sent');
     }
 
     /**
@@ -259,8 +259,8 @@ class ChallengeController
     protected function passed(Request $request, Authenticatable $user, PendingLogin $pending, string $via, bool $trust): Response
     {
         if ($this->channels->methodFor($user)->state === UserMethod::PROOF) {
-            $this->confirmDestination($user);
-
+            // `confirmed_at` is written by the final login (finishLogin()), not here: an abandoned
+            // enrollment leaves the record as it was (the next login still rotates the remember token).
             $pending = $pending->toEnrollment($via === TwoFactorPassed::VIA_RECOVERY_CODE ? PendingLogin::VIA_RECOVERY_CODE : PendingLogin::VIA_CODE);
             $pending->store($request->session());
 
@@ -335,7 +335,7 @@ class ChallengeController
      */
     protected function displayChannel(Authenticatable $user, PendingLogin $pending, TwoFactorChannel $method): TwoFactorChannel
     {
-        if ($pending->context === TwoFactorChallengeSent::CONTEXT_FALLBACK && $pending->channel !== $method->name()) {
+        if ($pending->context === Context::FALLBACK && $pending->channel !== $method->name()) {
             return $this->challenges->fallbackChannel($user) ?? $method;
         }
 

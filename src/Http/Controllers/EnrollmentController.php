@@ -11,12 +11,13 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
+use Nakipelo\Orchid2FA\Challenge\Context;
 use Nakipelo\Orchid2FA\Challenge\EnrollmentState;
 use Nakipelo\Orchid2FA\Challenge\PendingLogin;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
 use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
+use Nakipelo\Orchid2FA\Channels\UserMethod;
 use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Events\TwoFactorChannelChanged;
 use Nakipelo\Orchid2FA\Events\TwoFactorPassed;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
@@ -90,12 +91,12 @@ class EnrollmentController
         }
 
         $driver = $this->channels->channel($channel);
-        $state = EnrollmentState::fromSession($request->session(), $user, $channel, TwoFactorChallengeSent::CONTEXT_ENROLL, $this->enrollmentTtl());
+        $state = EnrollmentState::fromSession($request->session(), $user, $channel, Context::ENROLL, $this->enrollmentTtl());
 
         $error = null;
 
         if ($state === null) {
-            $state = EnrollmentState::start($request->session(), $user, $channel, TwoFactorChallengeSent::CONTEXT_ENROLL);
+            $state = EnrollmentState::start($request->session(), $user, $channel, Context::ENROLL);
             $error = $this->startStep($user, $driver, $state);
         }
 
@@ -144,10 +145,18 @@ class EnrollmentController
 
         $driver = $this->channels->channel($channel);
         $stepUrl = route(Orchid::enrollRoute(), ['channel' => $channel]);
-        $state = EnrollmentState::fromSession($request->session(), $user, $channel, TwoFactorChallengeSent::CONTEXT_ENROLL, $this->enrollmentTtl());
+        $state = EnrollmentState::fromSession($request->session(), $user, $channel, Context::ENROLL, $this->enrollmentTtl());
+
+        // "Send again" exists only for a delivery channel; for a verifier channel it would only
+        // generate a new secret behind the shown one.
+        if ($request->boolean('resend') && ! $driver->requiresDelivery()) {
+            $this->flashError($request, $this->trans('errors.resend_unavailable'));
+
+            return redirect()->to($stepUrl);
+        }
 
         if ($request->boolean('resend')) {
-            $state ??= EnrollmentState::start($request->session(), $user, $channel, TwoFactorChallengeSent::CONTEXT_ENROLL);
+            $state ??= EnrollmentState::start($request->session(), $user, $channel, Context::ENROLL);
             $error = $this->startStep($user, $driver, $state);
             $error === null ? $this->flashStatus($request, $this->trans('challenge.resent')) : $this->flashError($request, $error);
 
@@ -207,7 +216,7 @@ class EnrollmentController
             return $this->browserRequired(route(Orchid::recoveryCodesRoute()));
         }
 
-        $resolved = $this->resolveStage($request, PendingLogin::STAGE_RECOVERY_CODES);
+        $resolved = $this->resolveCodes($request);
 
         if (! is_array($resolved)) {
             return $resolved;
@@ -234,7 +243,7 @@ class EnrollmentController
             return $this->browserRequired(route(Orchid::recoveryCodesRoute()));
         }
 
-        $resolved = $this->resolveStage($request, PendingLogin::STAGE_RECOVERY_CODES);
+        $resolved = $this->resolveCodes($request);
 
         if (! is_array($resolved)) {
             return $resolved;
@@ -246,17 +255,59 @@ class EnrollmentController
     }
 
     /**
+     * The pending login at the enrollment step, while the user's method is still what it was when
+     * the step started (spec 0.2 §5.4, §9): without a method (A, `via` null) or with the proof
+     * method (B). A method enrolled meanwhile (in another browser, in the profile) or a reset ends
+     * the step: it must not replace the method with another binding, the login starts again.
+     *
      * @return array{0: PendingLogin, 1: Authenticatable}|Response
      */
     protected function resolveEnrollment(Request $request): array|Response
     {
         $resolved = $this->resolveStage($request, PendingLogin::STAGE_ENROLL);
 
-        if (is_array($resolved) && $this->channels->allowed() === []) {
+        if (! is_array($resolved)) {
+            return $resolved;
+        }
+
+        if ($this->channels->allowed() === []) {
             // Nothing to enroll (spec 0.2 §4.3): fail closed.
             $this->forgetPending($request);
 
             return $this->sessionExpiredRedirect('errors.channel_unavailable');
+        }
+
+        $expected = $resolved[0]->via === null ? UserMethod::NONE : UserMethod::PROOF;
+
+        if ($this->channels->methodFor($resolved[1])->state !== $expected) {
+            $this->forgetPending($request);
+
+            return $this->sessionExpiredRedirect();
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * The pending login at the recovery codes of the enrollment, while the user's method is still
+     * the one it enrolled (a reset or another enrollment meanwhile ends it).
+     *
+     * @return array{0: PendingLogin, 1: Authenticatable}|Response
+     */
+    protected function resolveCodes(Request $request): array|Response
+    {
+        $resolved = $this->resolveStage($request, PendingLogin::STAGE_RECOVERY_CODES);
+
+        if (! is_array($resolved)) {
+            return $resolved;
+        }
+
+        $method = $this->channels->methodFor($resolved[1]);
+
+        if ($method->state !== UserMethod::ACTIVE || $method->channel?->name() !== $resolved[0]->channel) {
+            $this->forgetPending($request);
+
+            return $this->sessionExpiredRedirect();
         }
 
         return $resolved;
@@ -302,11 +353,12 @@ class EnrollmentController
     }
 
     /**
-     * No trust checkbox after a recovery code (spec 0.2 §5.3).
+     * The trust checkbox only after a code of the user's method (spec 0.2 §5.4 B): not after a
+     * recovery code (§5.3) and not for an enrollment protected by the password only (§5.4 A).
      */
     protected function trustAllowed(PendingLogin $pending): bool
     {
-        return $this->trustedDevices->isEnabled() && $pending->via !== PendingLogin::VIA_RECOVERY_CODE;
+        return $this->trustedDevices->isEnabled() && $pending->via === PendingLogin::VIA_CODE;
     }
 
     /**

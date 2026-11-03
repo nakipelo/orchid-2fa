@@ -15,10 +15,10 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
+use Nakipelo\Orchid2FA\Challenge\Context;
 use Nakipelo\Orchid2FA\Challenge\PendingLogin;
 use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
 use Nakipelo\Orchid2FA\Channels\UserMethod;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Events\TwoFactorFailed;
 use Nakipelo\Orchid2FA\Events\TwoFactorPassed;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
@@ -200,7 +200,7 @@ class LoginController
         $error = null;
 
         try {
-            $challenge = $this->challenges->start($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $channel);
+            $challenge = $this->challenges->start($user, Context::LOGIN, $channel);
         } catch (SendLimitExceededException $e) {
             $error = $this->sendLimitMessage($e->availableIn);
         } catch (DeliveryFailedException) {

@@ -7,6 +7,7 @@ namespace Nakipelo\Orchid2FA\Channels;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Nakipelo\Orchid2FA\Challenge\Challenge;
 use Nakipelo\Orchid2FA\Challenge\CodeInput;
+use Nakipelo\Orchid2FA\Challenge\EnrollmentState;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
 use Nakipelo\Orchid2FA\Channels\Concerns\ConfiguresChannel;
 use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
@@ -17,7 +18,9 @@ use Throwable;
  * (spec 0.2 §4.2). The server only verifies the code; nothing is sent.
  *
  * A driver implements verifyCode() (with replay protection, atomic under parallel requests),
- * isAvailableFor(), the enrollment methods and forget(). issue() and verify() are final.
+ * isAvailableFor(), startEnrollment(), confirmEnrollment() and forget(); enrollmentView() and
+ * enrollmentData() default to "no partial" (null and []) as in DeliveryChannel. issue() and verify()
+ * are final.
  *
  * The ChallengeManager counts every code of a verifier channel (and its enrollment) against the
  * challenge, the window of the user and the daily ceiling before the driver is asked
@@ -32,7 +35,7 @@ abstract class VerifierChannel implements TwoFactorChannel
      * Whether the code is correct for the user. Must refuse a code that was already accepted
      * (replay) and be atomic under parallel requests.
      */
-    abstract protected function verifyCode(Authenticatable $user, string $code): bool;
+    abstract protected function verifyCode(Authenticatable $user, #[\SensitiveParameter] string $code): bool;
 
     final public function requiresDelivery(): bool
     {
@@ -64,7 +67,7 @@ abstract class VerifierChannel implements TwoFactorChannel
      * Normalize the code (spaces, dashes) and ask the driver. An exception of the driver is
      * logged and refuses the code (fail-closed).
      */
-    final public function verify(Authenticatable $user, Challenge $challenge, string $code): VerificationResult
+    final public function verify(Authenticatable $user, Challenge $challenge, #[\SensitiveParameter] string $code): VerificationResult
     {
         $code = (string) preg_replace('/[\s-]+/u', '', $code);
 
@@ -98,5 +101,22 @@ abstract class VerifierChannel implements TwoFactorChannel
     public function challengeView(): ?string
     {
         return null;
+    }
+
+    /**
+     * No partial: the enrollment step is only the code. A driver with a QR code or a key to show
+     * overrides it.
+     */
+    public function enrollmentView(): ?string
+    {
+        return null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function enrollmentData(Authenticatable $user, EnrollmentState $state): array
+    {
+        return [];
     }
 }

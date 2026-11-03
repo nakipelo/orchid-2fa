@@ -80,7 +80,7 @@ class EmailChannel extends DeliveryChannel
         return mb_substr($address, 0, min(1, $at)).'***'.mb_substr($address, $at);
     }
 
-    public function send(Authenticatable $user, string $code, CarbonInterface $expiresAt): void
+    public function send(Authenticatable $user, #[\SensitiveParameter] string $code, CarbonInterface $expiresAt): void
     {
         $address = $this->destination($user);
 
@@ -118,7 +118,7 @@ class EmailChannel extends DeliveryChannel
         }
     }
 
-    protected function makeNotification(string $code, CarbonInterface $expiresAt): Notification
+    protected function makeNotification(#[\SensitiveParameter] string $code, CarbonInterface $expiresAt): Notification
     {
         $class = $this->config->get('orchid-2fa.notification.class', TwoFactorCodeNotification::class);
 

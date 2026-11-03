@@ -285,9 +285,13 @@ The step lives `enrollment_ttl` (15 minutes) from its start; five wrong codes en
 in again.
 
 - **No confirmed method** (a new user, after a reset): the setup is protected by the password only —
-  the accepted risk of a first enrollment (as in Laravel Fortify).
+  the accepted risk of a first enrollment (as in Laravel Fortify). It offers no "Trust this device"
+  checkbox. If the user gets a method meanwhile (set up in another browser), the step ends and the
+  sign-in starts again — with that method's code.
 - **A confirmed method that is no longer allowed:** first a code of that method (or a recovery code),
-  then the setup. Someone who knows only the password cannot bind their own method.
+  then the setup. Someone who knows only the password cannot bind their own method. The checkbox is
+  offered after a code (not after a recovery code); the record is confirmed only when the setup is
+  finished.
 
 ### Recovery codes
 
@@ -328,7 +332,7 @@ on the status and the permissions:
 
 | Action | Confirmation |
 |---|---|
-| **Enable** (voluntary) — choose a method, set it up | The code of the new method (e-mail: a code to the address) |
+| **Enable** (voluntary) — choose a method, set it up | Current password and the code of the new method (e-mail: a code to the address). A user whose 2FA is disabled but who still has a set-up method with data of its driver (e.g. an authenticator app left after "2FA required" was taken away) can enable only that method again — as a new setup; other methods are reached with "Change to …" afterwards |
 | **Change to …** another allowed method | Current password **and** a code of the current method (or a recovery code), then the setup of the new one |
 | **Set up again** (a method with a setup step, e.g. a new phone) | Current password and a code of the current method (or a recovery code), then the new setup; the old one works until the new one is confirmed |
 | **Disable** (voluntary users only; enforced users get `403`) | Current password and a code of the current method (or a recovery code) |
@@ -337,7 +341,9 @@ on the status and the permissions:
 
 The confirmation lives 10 minutes (`profile.confirmation_ttl`) and is bound to the session, the user,
 the action and the target method. A wrong password counts like a wrong code (and does not use up the
-code), so a stolen session cannot guess the password faster than a code. Changing or setting up the
+code), so a stolen session cannot guess the password faster than a code. The actions are throttled per
+user (`routes.profile_throttle`, 30 per minute). If the driver of the user's method is not installed,
+every change but enabling is refused with "Your sign-in method is not available". Changing or setting up the
 method again signs out of all trusted devices and rotates the remember token; every change sends a
 security notice to the user's address.
 
@@ -400,6 +406,7 @@ replacement works with `php artisan route:cache` too.
 | `notification.queue_name` | `null` | Queue name (`null` — default) |
 | `cache.store` | `null` | Cache store for codes (`null` — default store) |
 | `routes.throttle` | `'10,1'` | Per-IP throttle of the code routes: `max,minutes` |
+| `routes.profile_throttle` | `'30,1'` | Per-user throttle of the actions of the two-factor profile screen (`POST profile/two-factor/{method}`): `max,minutes` |
 | `menu.enabled` | `false` | Add a "Two-factor authentication" item to Orchid's main menu |
 | `log.enabled` | `false` | Write the package events to the log |
 | `log.channel` | `null` | Log channel (`null` — default) |
@@ -554,11 +561,18 @@ A channel is a class extending one of two base classes — the registry accepts 
   changes.
 - **`Nakipelo\Orchid2FA\Channels\VerifierChannel`** — the user's device generates the code. Implement
   `verifyCode(Authenticatable, string $code): bool` (protected; the code arrives without spaces and
-  dashes and is never empty), `isAvailableFor()`, `startEnrollment()`, `confirmEnrollment()`,
-  `enrollmentView()`, `enrollmentData()` and `forget()`. `verifyCode()` **must** refuse a code that
+  dashes and is never empty), `isAvailableFor()`, `startEnrollment()`, `confirmEnrollment()` and
+  `forget()`; `enrollmentView()` and `enrollmentData()` default to no partial (`null` and `[]`), as in
+  `DeliveryChannel` — override them to show a QR code or a key. `verifyCode()` **must** refuse a code that
   was already accepted (replay protection) **atomically**: two parallel requests with the same code
   must not both pass — use a conditional `UPDATE … WHERE last_step < ?` and check that one row changed,
-  not read-compare-write. An exception from `verifyCode()` is logged and counts as a wrong code.
+  not read-compare-write. An exception from `verifyCode()` or `confirmEnrollment()` is logged (without
+  the code) and counts as a wrong code. A new enrollment (setting the method up again) must replace
+  the previous binding: the old secret stops working at once.
+  The core marks its parameters carrying a code, a recovery code or a secret `#[\SensitiveParameter]`,
+  so a logged trace of a driver exception does not show them in the core's frames; the attribute is not
+  inherited, so a driver marks its own such parameters too (`verifyCode()`, `confirmEnrollment()`,
+  `send()`, helpers), as [nakipelo/orchid-2fa-totp](https://github.com/nakipelo/orchid-2fa-totp) does.
   Recovery codes are on by default (`needsRecoveryCodes()`); `allowsEmailFallback()` is off.
 
 The package does the rest for every channel: who the user is (the session only), attempt counting
@@ -607,6 +621,23 @@ both the sign-in screens and the profile:
 Partials have no `@extends`, no forms and no external resources (CSP); the package draws the `code`
 field and the buttons. Translations live in the driver's namespace.
 
+**What a driver may call.** Besides its own base class, a driver uses only these: the stable methods of
+`Nakipelo\Orchid2FA\Challenge\ChallengeManager` — `issue(Authenticatable $user, string $context =
+Context::LOGIN, ?TwoFactorChannel $channel = null): Challenge` (a delivery driver's enrollment issues its
+code through it: limits, events, fail-closed), `verify()`, `verifyRecoveryCode()`,
+`attemptsLeft()`, `sendAvailableIn()`, `annul()` and `fallbackChannel()`; the rest (`start()`,
+`rejectAttempt()`, `startEnrollment()`, `confirmEnrollment()`, `enrollmentChallenge()`, `lockout()`,
+`clear()`, `activeChallenge()`, `channelFor()`) serves the package's controllers and the profile and may
+change in a minor version. `TwoFactorManager::destinationChanged($user, '<name>', $old)` for a
+destination of its own. From the registry (`TwoFactor` facade): `TwoFactor::for($user)` returns the
+channel that verifies the user's code — the allowed method, **and also an enrolled method that is no
+longer allowed** (the proof before an allowed one is set up, state `proof`); `TwoFactor::methodFor($user)`
+returns `Channels\UserMethod` with the state (`active`, `proof`, `unavailable` — the driver is gone or
+cannot be created, `none`), the channel and the recorded name. The context of a challenge
+(`Challenge::$context`, the `$context` of `issue()`, `EnrollmentState::$context`) is one of the string
+constants of `Nakipelo\Orchid2FA\Challenge\Context`: `LOGIN`, `ENABLE`, `DISABLE`, `SWITCH`, `REBIND`,
+`REGENERATE`, `ENROLL`, `FALLBACK`.
+
 **Data and reset hooks.** Keep the driver's data in its own tables and migrations (foreign key to
 `users.id`, `cascadeOnDelete`). `forget(Authenticatable)` must erase them and be idempotent: the
 package calls it when the user leaves the method (change, disabling, reset). `isAvailableFor()` must
@@ -615,8 +646,11 @@ be false afterwards. A row may outlive a reset made while the driver was not ins
 
 **Conformance suite.** `Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase` is a PHPUnit test case
 (on Orchestra Testbench; Pest runs it as is) that boots Orchid, this package and the driver with an
-in-memory SQLite database and checks the sign-in, limits, bypasses, replay, trusted devices,
-remember tokens, reset, recovery codes, enrollment and that no codes or secrets reach logs and events.
+in-memory SQLite database and checks the sign-in, limits, bypasses, replay (also of two interleaved
+verifications), trusted devices, remember tokens, reset, that a new enrollment invalidates the code of
+the old binding, recovery codes, enrollment and that no codes or secrets reach logs and events — also
+while the enrollment step is shown (string values of `enrollmentData()` of 8 characters or more must not
+reach the log).
 Add the dependencies to the driver's `require-dev` (this package does not require them):
 
 ```json
@@ -654,16 +688,17 @@ class AcmeChannelConformanceTest extends ChannelConformanceTestCase
     // A code the channel accepts now (a delivery channel: the code it has just sent).
     protected function validCode(User $user): string { /* ... */ }
 
-    // A code the channel refuses now.
-    protected function invalidCode(User $user): string { /* ... */ }
+    // A code the channel refuses now; $state — the enrollment step the code is for (null — the
+    // login): exclude the codes of the secret in the state too.
+    protected function invalidCode(User $user, ?EnrollmentState $state = null): string { /* ... */ }
 
     // Move to the next code window (e.g. $this->travel(30)->seconds()); a no-op for delivery.
     protected function nextCodeWindow(): void { /* ... */ }
 
     protected function completeEnrollmentCode(User $user, EnrollmentState $state): string { /* ... */ }
 
-    // Verifier channels: a second instance of the channel that calls $between once after reading
-    // and before writing in verifyCode(); see the doc comment of the method.
+    // Verifier channels (required): a second instance of the channel that calls $between once after
+    // reading and before writing in verifyCode(); see the doc comment of the method.
     protected function racingChannel(Closure $between): ?VerifierChannel { /* ... */ }
 }
 ```
@@ -687,15 +722,25 @@ with `markTestSkipped()` when they really do not apply.
 **Replay under parallel requests.** The suite can check atomicity only with your help:
 `racingChannel()` returns a new instance of the channel (usually an anonymous subclass) that runs
 `$between` once between the read and the write of `verifyCode()`; the suite verifies the same code
-inside it and expects exactly one of the two verifications to pass. Without it (the default `null`)
-that test is skipped, and **the atomicity of the replay protection is checked only by the driver's own
+inside it and expects exactly one of the two verifications to pass. For a verifier channel the hook is
+**required**: with the default `null` the test fails ("Override racingChannel() or skipsRaceTest()").
+A driver that really cannot offer that point (e.g. the read and the write are one call of an external
+service) opts out explicitly with `protected function skipsRaceTest(): bool { return true; }`; the
+test is then skipped and **the atomicity of the replay protection is checked only by the driver's own
 tests** — see `tests/Feature/ReplayTest.php` of `nakipelo/orchid-2fa-totp` for both an interleaving
 test and one with parallel processes. A delivery channel needs nothing: its `verify()` is the final one
 of `DeliveryChannel`.
 
+**A new binding replaces the old one.** `test_a_new_enrollment_replaces_the_old_binding` takes
+`validCode()` of the enrolled user, enrolls the channel again (`completeEnrollmentCode()`) and expects
+the old code to be refused. When the new binding happens to give the same code (a verifier channel,
+about 10⁻⁶), the suite enrolls again (at most 5 times) instead of skipping; a driver that accepts the
+neighbouring time steps may, with a probability of about 2·10⁻⁶, get a false failure there.
+
 **Compatibility.** Depend on `nakipelo/orchid-2fa` `^0.2`. The public API — `Contracts\*`, the base
 classes, `EmailChannel`, `ChannelRegistry` and `Facades\TwoFactor`, `Challenge\{Challenge, CodeInput,
-EnrollmentState, VerificationResult}`, `Events\*`, `Exceptions\*`, `Testing\*`, config, route, view and
+Context, EnrollmentState, VerificationResult}`, `Channels\UserMethod`, `Events\*`, `Exceptions\*`,
+`Testing\*`, the `ChallengeManager` methods listed above, config, route, view and
 translation names — changes in 0.x only in a minor version with an upgrade section here. Classes
 marked `@internal` (`CodeStore`, `StoredCode`, `PendingLogin`, `ProfileChallenge`, `RecoveryCodes`,
 the controllers) are not part of it.
@@ -767,6 +812,9 @@ If the package is already removed, drop its table (`two_factor_totp`) and delete
   `TwoFactorLockedOut::$reason` has the new values `user_attempts_exceeded` and
   `user_daily_attempts_exceeded`.
 - `TwoFactorAuthentication::$channel` is nullable.
+- The contexts of challenges are constants of `Challenge\Context` (`Context::LOGIN`, …, the values are
+  unchanged); `TwoFactorChallengeSent::CONTEXT_LOGIN`, `CONTEXT_ENABLE` and `CONTEXT_DISABLE` of 0.1 are
+  deprecated aliases, removed in 0.3.
 - `orchid-2fa:reset`: the `email` argument is optional (exclusive with `--channel`); `orchid-2fa:reset
   <email>` works as before.
 
@@ -778,7 +826,14 @@ If the package is already removed, drop its table (`two_factor_totp`) and delete
 - **First enrollment.** A user without any confirmed method (new, after a reset, or whose e-mail was
   never confirmed when only an app is allowed) sets up a method protected by the password only, as in
   Laravel Fortify. The setup lives `enrollment_ttl` (15 minutes) from its start; the user then signs in
-  again.
+  again. Such a setup never trusts the device (no checkbox, no cookie), and it ends (back to the
+  sign-in form) as soon as the user has a method by other means — e.g. the owner set one up in another
+  browser — so a second browser with the password cannot replace it. A window remains inside one
+  request, from that check until `commitEnrollment()` records the method; the driver's
+  `confirmEnrollment()` stores its data (the secret) before the core records the method, so only a
+  conditional write in the driver as well can close it (a candidate for the 0.3 contract:
+  `confirmEnrollment()` with the expected previous state). In practice it needs the password and both
+  confirmations within milliseconds of each other.
 - **Lost device and recovery codes.** A user without the device and without recovery codes is restored
   only by an administrator ("Reset 2FA" or `orchid-2fa:reset`); there is no self-service recovery.
 - **Removing a driver.** Users of a channel whose driver is not registered cannot sign in (fail-closed,
@@ -789,11 +844,12 @@ If the package is already removed, drop its table (`two_factor_totp`) and delete
   with a code for up to 24 hours (a recovery code is counted in the same limits). The owner gets an
   e-mail and should change the password; `TwoFactorLockedOut` is the signal for monitoring.
 - **Atomicity of drivers.** Replay protection of a verifier channel is the driver's job. The
-  conformance suite checks it only for drivers that implement its `racingChannel()` hook; review the
-  driver's own tests before trusting a third-party driver. A driver runs in your application process
+  conformance suite requires its `racingChannel()` hook from a verifier driver; a driver may opt out
+  with `skipsRaceTest()` — check for it and review the driver's own tests before trusting a
+  third-party driver. A driver runs in your application process
   and can do anything: install drivers you trust.
-- **Password for changes of 2FA.** Changing the method, setting it up again, disabling 2FA and new
-  recovery codes ask for the current password; the "Profile" screen of the Orchid stubs changes the
+- **Password for changes of 2FA.** Enabling, changing the method, setting it up again, disabling 2FA
+  and new recovery codes ask for the current password; the "Profile" screen of the Orchid stubs changes the
   e-mail address without it (see "E-mail change without a password").
 - **Queue mode.** With `notification.queue = true` a delivery error happens in the worker: the user
   sees the code screen, but no code arrives (they can resend within the limits). A queue worker must
@@ -886,12 +942,15 @@ If the package is already removed, drop its table (`two_factor_totp`) and delete
   ±1 step tolerance, and the owner is told by e-mail.
 - A code of another channel's challenge is not accepted (the method changed or was reset meanwhile).
 - Recovery codes: about 40 bits each, stored as hashes only, consumed atomically, shown once.
-- Changing, setting up again or disabling the method and new recovery codes need the current password
-  and a code in the same form; the confirmation is bound to the session, the user, the action and the
+- Enabling needs the current password with the first code of the new method; changing, setting up again
+  or disabling the method and new recovery codes need the current password and a code in the same form; the confirmation is bound to the session, the user, the action and the
   target method. Enforced users cannot disable 2FA (checked on the server). Every change sends a
   security notice.
 - Setting up a method at sign-in when a confirmed (but no longer allowed) method exists requires a code
-  of that method first.
+  of that method first. A setup step checks on every request that the user's method is still what it
+  was when the step started (none, or the proof method): a method set up meanwhile ends it, so a
+  second browser with the password cannot replace it. A setup with the password only never trusts the
+  device. A setup over a recorded method signs out of the trusted devices.
 - Wrong passwords get exactly Orchid's response; send limits apply only after a correct password.
 - Remember-me cookies are issued only after the second factor; tokens are rotated when a method is set
   up, changed or set up again, when the code step starts for a user whose 2FA is not confirmed (a new

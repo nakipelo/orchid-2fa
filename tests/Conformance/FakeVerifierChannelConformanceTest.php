@@ -46,12 +46,20 @@ class FakeVerifierChannelConformanceTest extends ChannelConformanceTestCase
         return FakeVerifierChannel::currentCode($user);
     }
 
-    protected function invalidCode(User $user): string
+    protected function invalidCode(User $user, ?EnrollmentState $state = null): string
     {
         try {
             $valid = [FakeVerifierChannel::currentCode($user, -1), FakeVerifierChannel::currentCode($user), FakeVerifierChannel::currentCode($user, 1)];
         } catch (\RuntimeException) {
             $valid = []; // not enrolled yet
+        }
+
+        // The codes of the secret of the enrollment step.
+        $secret = $state?->get('secret');
+
+        if (is_string($secret)) {
+            $step = FakeVerifierChannel::currentStep();
+            array_push($valid, FakeVerifierChannel::codeFor($secret, $step - 1), FakeVerifierChannel::codeFor($secret, $step), FakeVerifierChannel::codeFor($secret, $step + 1));
         }
 
         foreach (['000000', '111111', '222222', '333333'] as $code) {
@@ -96,5 +104,20 @@ class FakeVerifierChannelConformanceTest extends ChannelConformanceTestCase
             DB::table(FakeVerifierChannel::TABLE)->where('user_id', User::query()->where('email', 'other@example.com')->value('id'))->value('secret'),
             str_repeat('s', 32),
         );
+    }
+
+    /**
+     * The new enrollment gets the secret of the old binding, so the old code is valid again: the suite
+     * enrolls once more (a new secret) instead of skipping the check.
+     */
+    public function test_a_new_enrollment_replaces_the_old_binding_when_the_codes_coincide(): void
+    {
+        $this->secrets = [str_repeat('o', 32)];
+        FakeVerifierChannel::$enrollmentSecrets = [str_repeat('o', 32)];
+
+        $this->test_a_new_enrollment_replaces_the_old_binding();
+
+        $this->assertSame([], FakeVerifierChannel::$enrollmentSecrets);
+        $this->assertNotSame(str_repeat('o', 32), DB::table(FakeVerifierChannel::TABLE)->value('secret'));
     }
 }

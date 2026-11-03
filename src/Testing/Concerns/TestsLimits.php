@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Nakipelo\Orchid2FA\Testing\Concerns;
 
 use Illuminate\Support\Facades\Event;
+use Nakipelo\Orchid2FA\Challenge\Context;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Events\TwoFactorLockedOut;
 use Nakipelo\Orchid2FA\Support\Orchid;
 use Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase;
@@ -46,14 +46,14 @@ trait TestsLimits
 
         // A new challenge does not reset the window: 4 + 4 + 2 wrong codes.
         foreach ([4, 4, 2] as $count) {
-            $challenge = $this->challenges()->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
+            $challenge = $this->challenges()->issue($user, Context::LOGIN, $this->channel());
 
             for ($i = 0; $i < $count; $i++) {
                 $this->challenges()->verify($user, $challenge, $wrong);
             }
         }
 
-        $challenge = $this->challenges()->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
+        $challenge = $this->challenges()->issue($user, Context::LOGIN, $this->channel());
 
         $this->assertSame(VerificationResult::LockedOut, $this->challenges()->verify($user, $challenge, $this->validCode($user)));
         Event::assertDispatched(TwoFactorLockedOut::class, fn (TwoFactorLockedOut $event): bool => $event->reason === TwoFactorLockedOut::USER_ATTEMPTS_EXCEEDED
@@ -72,14 +72,14 @@ trait TestsLimits
         $wrong = $this->invalidCode($user);
 
         for ($i = 0; $i < 30; $i += 3) {
-            $challenge = $this->challenges()->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
+            $challenge = $this->challenges()->issue($user, Context::LOGIN, $this->channel());
 
             for ($j = 0; $j < 3; $j++) {
                 $this->challenges()->verify($user, $challenge, $wrong);
             }
         }
 
-        $challenge = $this->challenges()->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
+        $challenge = $this->challenges()->issue($user, Context::LOGIN, $this->channel());
 
         $this->assertSame(VerificationResult::LockedOut, $this->challenges()->verify($user, $challenge, $this->validCode($user)));
         Event::assertDispatched(TwoFactorLockedOut::class, fn (TwoFactorLockedOut $event): bool => $event->reason === TwoFactorLockedOut::USER_DAILY_ATTEMPTS_EXCEEDED

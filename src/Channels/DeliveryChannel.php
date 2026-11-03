@@ -48,7 +48,7 @@ abstract class DeliveryChannel implements TwoFactorChannel
      *
      * @throws DeliveryFailedException
      */
-    abstract public function send(Authenticatable $user, string $code, CarbonInterface $expiresAt): void;
+    abstract public function send(Authenticatable $user, #[\SensitiveParameter] string $code, CarbonInterface $expiresAt): void;
 
     final public function requiresDelivery(): bool
     {
@@ -131,7 +131,7 @@ abstract class DeliveryChannel implements TwoFactorChannel
      * verification gets `Expired`). Never returns `LockedOut`: the attempts are the
      * ChallengeManager's.
      */
-    final public function verify(Authenticatable $user, Challenge $challenge, string $code): VerificationResult
+    final public function verify(Authenticatable $user, Challenge $challenge, #[\SensitiveParameter] string $code): VerificationResult
     {
         $userId = $user->getAuthIdentifier();
         $stored = $this->codes()->get($userId);
@@ -257,7 +257,7 @@ abstract class DeliveryChannel implements TwoFactorChannel
      * Check the code of the step. Called by ChallengeManager::confirmEnrollment(), which counts the
      * attempt before.
      */
-    public function confirmEnrollment(Authenticatable $user, EnrollmentState $state, string $code): VerificationResult
+    public function confirmEnrollment(Authenticatable $user, EnrollmentState $state, #[\SensitiveParameter] string $code): VerificationResult
     {
         $challengeId = $state->get('challenge_id');
 
@@ -306,7 +306,7 @@ abstract class DeliveryChannel implements TwoFactorChannel
     /**
      * Users may paste the code with spaces or dashes.
      */
-    protected function normalize(string $code): string
+    protected function normalize(#[\SensitiveParameter] string $code): string
     {
         return (string) preg_replace('/[\s-]+/u', '', $code);
     }

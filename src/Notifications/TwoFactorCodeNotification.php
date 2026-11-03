@@ -17,7 +17,7 @@ use Illuminate\Notifications\Notification;
 class TwoFactorCodeNotification extends Notification
 {
     public function __construct(
-        public readonly string $code,
+        #[\SensitiveParameter] public readonly string $code,
         public readonly CarbonInterface $expiresAt,
     ) {}
 

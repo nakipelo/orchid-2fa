@@ -189,11 +189,14 @@ return [
     |
     | throttle: per-IP "throttle" middleware parameters for verify, resend,
     | recovery code, e-mail fallback and the enrollment confirmation.
+    | profile_throttle: the same for the actions of the two-factor profile
+    | screen (POST profile/two-factor/{method}), per signed-in user.
     |
     */
 
     'routes' => [
         'throttle' => '10,1',
+        'profile_throttle' => '30,1',
     ],
 
     /*

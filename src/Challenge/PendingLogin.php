@@ -6,7 +6,6 @@ namespace Nakipelo\Orchid2FA\Challenge;
 
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Session\Session;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 
 /**
  * "Password is correct, waiting for the code" (spec §3): kept in the server session
@@ -50,7 +49,7 @@ final class PendingLogin
         public readonly string $challengeId,
         public readonly string $passwordHash,
         public readonly string $channel,
-        public readonly string $context = TwoFactorChallengeSent::CONTEXT_LOGIN,
+        public readonly string $context = Context::LOGIN,
         public readonly string $stage = self::STAGE_CHALLENGE,
         public readonly ?string $via = null,
         public readonly ?int $stageStartedAt = null,
@@ -144,7 +143,7 @@ final class PendingLogin
      * The same pending login with another challenge (resend, e-mail fallback); `$channel` — when
      * the challenge belongs to another channel.
      */
-    public function withChallenge(string $challengeId, ?string $channel = null, string $context = TwoFactorChallengeSent::CONTEXT_LOGIN): self
+    public function withChallenge(string $challengeId, ?string $channel = null, string $context = Context::LOGIN): self
     {
         return new self(
             $this->userId,

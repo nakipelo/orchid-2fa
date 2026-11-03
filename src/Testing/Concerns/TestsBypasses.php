@@ -5,15 +5,16 @@ declare(strict_types=1);
 namespace Nakipelo\Orchid2FA\Testing\Concerns;
 
 use Nakipelo\Orchid2FA\Challenge\Challenge;
+use Nakipelo\Orchid2FA\Challenge\Context;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Support\Orchid;
 use Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase;
 
 /**
  * Bypasses (spec §9 of 0.1, 0.2 §9): no pending login, a user id in the body, a replayed code in
  * another session, a code verified twice one after another and two verifications of a code that
- * interleave (the latter needs ChannelConformanceTestCase::racingChannel() of a verifier driver).
+ * interleave (the latter needs ChannelConformanceTestCase::racingChannel() of a verifier driver,
+ * or an explicit opt-out with skipsRaceTest()).
  *
  * @mixin ChannelConformanceTestCase
  */
@@ -22,7 +23,7 @@ trait TestsBypasses
     public function test_verify_without_a_pending_login_signs_nobody_in(): void
     {
         $user = $this->enrolledUser();
-        $this->challenges()->start($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
+        $this->challenges()->start($user, Context::LOGIN, $this->channel());
 
         $this->verifyCode($this->validCode($user), ['user_id' => $user->getKey()])->assertRedirect(Orchid::loginUrl());
         $this->assertGuest();
@@ -69,10 +70,10 @@ trait TestsBypasses
     public function test_a_code_is_accepted_only_once(): void
     {
         $user = $this->enrolledUser();
-        $first = $this->challenges()->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
+        $first = $this->challenges()->issue($user, Context::LOGIN, $this->channel());
         $code = $this->validCode($user);
         // The second request carries the same challenge (delivery) or its own one (verifier).
-        $second = $this->isDelivery() ? $first : $this->challenges()->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
+        $second = $this->isDelivery() ? $first : $this->challenges()->issue($user, Context::LOGIN, $this->channel());
 
         $this->assertSame(VerificationResult::Passed, $this->challenges()->verify($user, $first, $code));
         $this->assertNotSame(VerificationResult::Passed, $this->challenges()->verify($user, $second, $code));
@@ -95,17 +96,21 @@ trait TestsBypasses
 
         $racing = $this->racingChannel(function () use (&$second, $user, $code): void {
             $channel = $this->channel();
-            $second = $channel->verify($user, Challenge::make($channel->name(), TwoFactorChallengeSent::CONTEXT_LOGIN), $code);
+            $second = $channel->verify($user, Challenge::make($channel->name(), Context::LOGIN), $code);
         });
 
         if ($racing === null) {
-            $this->markTestSkipped('Override racingChannel() to check that the replay protection of the channel is atomic.');
+            if ($this->skipsRaceTest()) {
+                $this->markTestSkipped('The driver opted out of the race test with skipsRaceTest(); its own tests prove the atomic replay protection.');
+            }
+
+            $this->fail('Override racingChannel() or skipsRaceTest(): a verifier channel must show that its replay protection is atomic (two interleaved verifications of one code let only one pass).');
         }
 
         $racing->bootChannel($this->channelName(), (array) config('orchid-2fa.channels.'.$this->channelName(), []));
         $this->assertNotSame($this->channel(), $racing, 'racingChannel() must return a new instance, not the one of the registry.');
 
-        $first = $racing->verify($user, Challenge::make($this->channelName(), TwoFactorChallengeSent::CONTEXT_LOGIN), $code);
+        $first = $racing->verify($user, Challenge::make($this->channelName(), Context::LOGIN), $code);
 
         $this->assertNotNull($second, 'The channel of racingChannel() did not call the callback while verifying the code.');
         $this->assertSame(

@@ -342,11 +342,13 @@ final class Orchid
      * with breadcrumbs "Home > Profile > {title}" (the profile step only if its route exists).
      *
      * @param  class-string  $screen
+     * @param  list<string>  $middleware  extra middleware of the screen's route
      */
-    public static function registerProfileScreen(string $uri, string $screen, string $name, Closure $title): void
+    public static function registerProfileScreen(string $uri, string $screen, string $name, Closure $title, array $middleware = []): void
     {
-        self::routeGroup(true, static function () use ($uri, $screen, $name, $title): void {
+        self::routeGroup(true, static function () use ($uri, $screen, $name, $title, $middleware): void {
             Route::screen($uri, $screen)
+                ->middleware($middleware)
                 ->name(substr($name, strlen(self::ROUTE_NAME_PREFIX)))
                 ->breadcrumbs(static function (Trail $trail) use ($title): Trail {
                     $trail->parent(self::ROUTE_NAME_PREFIX.'index');

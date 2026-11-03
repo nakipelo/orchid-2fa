@@ -16,6 +16,9 @@ use Illuminate\Contracts\Session\Session;
  *   when the current method confirmed the action (null for enabling, which needs no confirmation);
  * - `step = show_codes`: the new recovery codes are shown once.
  *
+ * The actions are also the contexts of their challenges: the values of the Context constants of
+ * the same names.
+ *
  * The password is never kept here: it is checked in the confirming request and dropped.
  *
  * @internal

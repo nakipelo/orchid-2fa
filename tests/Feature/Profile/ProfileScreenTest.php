@@ -161,7 +161,7 @@ it('enables 2FA only after the code and rotates the remember token', function ()
         ->assertSee(pfUrl('enable'), false)
         ->assertSee(pfUrl('cancelCode'), false);
 
-    pfPost('enable', ['code' => tfLastCode()])
+    pfPost('enable', ['password' => 'password', 'code' => tfLastCode()])
         ->assertRedirect(pfUrl())
         ->assertSessionHasNoErrors()
         ->assertSessionHas(Toast::SESSION_MESSAGE, 'Two-factor authentication is enabled.');
@@ -188,7 +188,7 @@ it('stops an old remember cookie after enabling', function () {
 
     $this->actingAs($user);
     pfPost('sendEnableCode');
-    pfPost('enable', ['code' => tfLastCode()])->assertSessionHasNoErrors();
+    pfPost('enable', ['password' => 'password', 'code' => tfLastCode()])->assertSessionHasNoErrors();
 
     $this->newBrowser();
     $this->withCookie($recaller, $cookie)->get(route('platform.main'))->assertRedirect(route('platform.login'));
@@ -199,7 +199,7 @@ it('asks for the code at the next login after enabling', function () {
     $user = tfUser();
     $this->actingAs($user);
     pfPost('sendEnableCode');
-    pfPost('enable', ['code' => tfLastCode()]);
+    pfPost('enable', ['password' => 'password', 'code' => tfLastCode()]);
     $this->newBrowser();
 
     tfLogin('user@example.com')->assertRedirect(route('platform.two-factor.challenge'));
@@ -212,7 +212,7 @@ it('does not enable with a wrong code and counts the attempts', function () {
     pfPost('sendEnableCode');
     $code = tfLastCode();
 
-    pfPost('enable', ['code' => tfWrongCode($code)])
+    pfPost('enable', ['password' => 'password', 'code' => tfWrongCode($code)])
         ->assertRedirect(pfUrl())
         ->assertSessionHasErrors(['code' => 'The code is incorrect. Attempts left: 4.']);
 
@@ -221,7 +221,7 @@ it('does not enable with a wrong code and counts the attempts', function () {
     // The screen keeps the code step.
     $this->get(pfUrl())->assertSee('name="code"', false);
 
-    pfPost('enable', ['code' => $code])->assertSessionHasNoErrors();
+    pfPost('enable', ['password' => 'password', 'code' => $code])->assertSessionHasNoErrors();
     expect(pfRecord($user)->enabled_at)->not->toBeNull();
 });
 
@@ -232,14 +232,14 @@ it('annuls the code after the last wrong attempt', function () {
     $code = tfLastCode();
 
     foreach (range(1, 4) as $ignored) {
-        pfPost('enable', ['code' => tfWrongCode($code)])->assertSessionHasErrors('code');
+        pfPost('enable', ['password' => 'password', 'code' => tfWrongCode($code)])->assertSessionHasErrors('code');
     }
 
-    pfPost('enable', ['code' => tfWrongCode($code)])
+    pfPost('enable', ['password' => 'password', 'code' => tfWrongCode($code)])
         ->assertSessionHasNoErrors()
         ->assertSessionHas(Toast::SESSION_MESSAGE, 'The code is no longer valid. Please request a new one.');
 
-    pfPost('enable', ['code' => $code])->assertSessionHas(Toast::SESSION_MESSAGE, 'The code is no longer valid. Please request a new one.');
+    pfPost('enable', ['password' => 'password', 'code' => $code])->assertSessionHas(Toast::SESSION_MESSAGE, 'The code is no longer valid. Please request a new one.');
 
     expect(pfRecord($user))->toBeNull();
     $this->get(pfUrl())->assertDontSee('name="code"', false);
@@ -249,7 +249,7 @@ it('does not enable by a direct request without a code request', function () {
     $user = tfUser();
     $this->actingAs($user);
 
-    pfPost('enable', ['code' => '123456'])
+    pfPost('enable', ['password' => 'password', 'code' => '123456'])
         ->assertSessionHas(Toast::SESSION_MESSAGE, 'The code is no longer valid. Please request a new one.');
 
     expect(pfRecord($user))->toBeNull();
@@ -274,7 +274,7 @@ it('does not accept a code of another challenge, e.g. from a login', function ()
     $this->travel(61)->seconds();
     app(ChallengeManager::class)->issue($user);
 
-    pfPost('enable', ['code' => tfLastCode()])
+    pfPost('enable', ['password' => 'password', 'code' => tfLastCode()])
         ->assertSessionHas(Toast::SESSION_MESSAGE, 'The code is no longer valid. Please request a new one.');
 
     expect(pfRecord($user))->toBeNull();
@@ -289,7 +289,7 @@ it('does not accept the code of another user', function () {
     $user = tfUser();
     $this->actingAs($user);
 
-    pfPost('enable', ['code' => $code])
+    pfPost('enable', ['password' => 'password', 'code' => $code])
         ->assertSessionHas(Toast::SESSION_MESSAGE, 'The code is no longer valid. Please request a new one.');
 
     expect(pfRecord($user))->toBeNull()
@@ -329,10 +329,10 @@ it('sends a new code with "send again" and accepts only the latest', function ()
     expect(tfSentCodes())->toHaveCount(2);
 
     if ($first !== $second) {
-        pfPost('enable', ['code' => $first])->assertSessionHasErrors('code');
+        pfPost('enable', ['password' => 'password', 'code' => $first])->assertSessionHasErrors('code');
     }
 
-    pfPost('enable', ['code' => $second])->assertSessionHasNoErrors();
+    pfPost('enable', ['password' => 'password', 'code' => $second])->assertSessionHasNoErrors();
     expect(pfRecord($user)->enabled_at)->not->toBeNull();
 });
 
@@ -356,7 +356,7 @@ it('cancels the code step', function () {
     pfPost('cancelCode')->assertRedirect(pfUrl());
 
     $this->get(pfUrl())->assertDontSee('name="code"', false)->assertSee(pfUrl('sendEnableCode'), false);
-    pfPost('enable', ['code' => tfLastCode()]);
+    pfPost('enable', ['password' => 'password', 'code' => tfLastCode()]);
     expect(pfRecord($user))->toBeNull();
 });
 
@@ -468,7 +468,7 @@ it('refuses enabling for an enforced user', function () {
     $this->actingAs($user);
 
     pfPost('sendEnableCode')->assertForbidden();
-    pfPost('enable', ['code' => '123456'])->assertForbidden();
+    pfPost('enable', ['password' => 'password', 'code' => '123456'])->assertForbidden();
 
     Notification::assertNothingSent();
     expect(pfRecord($user))->toBeNull();

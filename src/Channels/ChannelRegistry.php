@@ -13,6 +13,7 @@ use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
 use Nakipelo\Orchid2FA\Exceptions\UnknownChannelException;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Psr\Log\LoggerInterface;
+use Throwable;
 
 /**
  * The registry of two-factor channels (spec 0.2 §4.3), a singleton behind the `TwoFactor` facade.
@@ -37,6 +38,13 @@ class ChannelRegistry
      */
     protected array $channels = [];
 
+    /**
+     * Allowed names whose driver could not be created, with the reason (found by check()).
+     *
+     * @var array<string, string>
+     */
+    protected array $broken = [];
+
     public function __construct(
         protected Container $container,
         protected Repository $config,
@@ -52,7 +60,7 @@ class ChannelRegistry
     {
         $this->extensions[$name] = $factory;
 
-        unset($this->channels[$name]);
+        unset($this->channels[$name], $this->broken[$name]);
     }
 
     /**
@@ -99,17 +107,18 @@ class ChannelRegistry
      */
     public function allowed(): array
     {
-        return array_values(array_filter($this->allowedNames(), fn (string $name): bool => $this->has($name)));
+        return array_values(array_filter($this->allowedNames(), fn (string $name): bool => $this->has($name) && ! isset($this->broken[$name])));
     }
 
     /**
-     * Names in `channels.allowed` without a driver: ignored (spec 0.2 §4.3).
+     * Names in `channels.allowed` without a driver, or whose driver cannot be created (found by
+     * check() outside local/testing): ignored (spec 0.2 §4.3).
      *
      * @return list<string>
      */
     public function ignored(): array
     {
-        return array_values(array_filter($this->allowedNames(), fn (string $name): bool => ! $this->has($name)));
+        return array_values(array_diff($this->allowedNames(), $this->allowed()));
     }
 
     public function isAllowed(string $name): bool
@@ -119,9 +128,11 @@ class ChannelRegistry
 
     /**
      * Check `channels.allowed` once the application has booted (spec 0.2 §4.3): an ignored name is
-     * a `warning` in local/testing; no allowed channel at all is an exception in local/testing
-     * (`$strict`) and a `critical` log entry elsewhere (the logins that need the second factor then
-     * fail closed).
+     * a `warning` in local/testing; every allowed driver is created, and one that cannot be (e.g.
+     * `channels.<name>.driver` is not a subclass of a base class) is an exception in local/testing
+     * (`$strict`) and a `warning` elsewhere, where the channel is then ignored like a name without a
+     * driver (no error page for the users); no allowed channel at all is an exception in local/testing
+     * and a `critical` log entry elsewhere (the logins that need the second factor then fail closed).
      *
      * @throws InvalidArgumentException
      */
@@ -132,6 +143,27 @@ class ChannelRegistry
                 'nakipelo/orchid-2fa: [orchid-2fa.channels.allowed] lists channels without a registered driver, they are ignored: %s.',
                 implode(', ', $ignored),
             ));
+        }
+
+        foreach ($this->allowed() as $name) {
+            try {
+                // A throwaway instance: the cached one is created on first use, after the application
+                // (and its tests, e.g. Notification::fake()) had the chance to swap the services.
+                $this->resolve($name);
+            } catch (Throwable $e) {
+                $message = sprintf(
+                    'nakipelo/orchid-2fa: the two-factor channel [%s] in [orchid-2fa.channels.allowed] cannot be created: %s',
+                    $name,
+                    $e->getMessage(),
+                );
+
+                if ($strict) {
+                    throw new InvalidArgumentException($message, 0, $e);
+                }
+
+                $this->broken[$name] = $e->getMessage();
+                $logger->warning($message.' It is ignored.');
+            }
         }
 
         if ($this->allowed() !== []) {
@@ -157,6 +189,10 @@ class ChannelRegistry
      * that is no longer allowed (the proof before enrolling an allowed one); otherwise the default
      * channel when it is allowed and a delivery channel without an enrollment step; null when the
      * driver of the recorded method is gone (fail closed) or there is no method (enrollment).
+     *
+     * Note: the channel is returned for a method in the state `proof` too (an enrolled method that is
+     * no longer allowed, §5.4 B): it still verifies the code of the login, after which an allowed
+     * method has to be enrolled. Use methodFor() to tell `active` from `proof`.
      */
     public function for(Authenticatable $user): ?TwoFactorChannel
     {
@@ -246,6 +282,7 @@ class ChannelRegistry
     public function forgetChannels(): void
     {
         $this->channels = [];
+        $this->broken = [];
     }
 
     /**
@@ -263,6 +300,10 @@ class ChannelRegistry
      */
     protected function tryChannel(string $name): ?TwoFactorChannel
     {
+        if (isset($this->broken[$name])) {
+            return null;
+        }
+
         try {
             return $this->channel($name);
         } catch (InvalidArgumentException) {

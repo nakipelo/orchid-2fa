@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Nakipelo\Orchid2FA\Testing\Concerns;
 
 use Nakipelo\Orchid2FA\Challenge\Challenge;
+use Nakipelo\Orchid2FA\Challenge\Context;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
-use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Support\Orchid;
 use Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase;
 use Nakipelo\Orchid2FA\Testing\Fixtures\User;
@@ -82,7 +82,7 @@ trait TestsLogin
                 $this->challenges()->clear($user);
             }
 
-            $this->challenges()->start($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
+            $this->challenges()->start($user, Context::LOGIN, $this->channel());
         } elseif ($renew) {
             $this->enroll($user);
         }
@@ -93,7 +93,7 @@ trait TestsLogin
     public function test_a_challenge_of_another_channel_is_refused(): void
     {
         $user = $this->enrolledUser();
-        $challenge = $this->challenges()->start($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
+        $challenge = $this->challenges()->start($user, Context::LOGIN, $this->channel());
         $code = $this->validCode($user);
 
         $foreign = new Challenge($challenge->id, $this->channelName().'-other', $challenge->context);

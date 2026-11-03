@@ -53,9 +53,10 @@ class TwoFactorManager
      * A method has been enrolled (spec 0.2 §4.8): at the login, in the profile (enabling, switching,
      * rebinding). Writes the channel and `confirmed_at = now()`; `enabled_at = now()` for a voluntary
      * enabling (it stays on a switch or rebind); calls forget() of the previous channel on a switch;
-     * signs out of the trusted devices on a switch or rebind; rotates the remember token; issues a new
-     * set of recovery codes for a channel that needs them (and removes them otherwise); fires
-     * `TwoFactorChannelChanged` and sends the security notice.
+     * signs out of the trusted devices on a switch, a rebind and an enrollment over a recorded
+     * channel; rotates the remember token; issues a new set of recovery codes for a channel that
+     * needs them (and removes them otherwise); fires `TwoFactorChannelChanged` and sends the
+     * security notice.
      *
      * @param  string  $reason  `TwoFactorChannelChanged::ENROLLED|SWITCHED|REBOUND`
      * @return list<string>|null the plain recovery codes to show once, or null
@@ -79,7 +80,9 @@ class TwoFactorManager
                 $this->forgetChannelData($user, $from);
             }
 
-            if ($reason === TwoFactorChannelChanged::REBOUND || ($from !== null && $from !== $to)) {
+            // A new binding replaces the previous one: a switch, a rebind, and an enrollment over a
+            // recorded method (the proof of §5.4 B, enabling over a leftover binding).
+            if ($reason === TwoFactorChannelChanged::REBOUND || $from !== null) {
                 $this->forgetTrustedDevices($user);
             }
 

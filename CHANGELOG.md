@@ -55,7 +55,17 @@ applications with e-mail codes only the upgrade is `composer require` and `php a
   `orchid-2fa::recovery-codes` and partials.
 - The conformance suite for drivers `Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase` (needs
   `orchestra/testbench` and PHPUnit or Pest in the driver's `require-dev`), with the hook
-  `racingChannel()` to check that the replay protection of a verifier channel is atomic.
+  `racingChannel()` to check that the replay protection of a verifier channel is atomic (required for a
+  verifier channel: without it the test fails; `skipsRaceTest()` is the explicit opt-out), a check that
+  a new enrollment invalidates the code of the old binding and a check that the values of
+  `enrollmentData()` do not reach the log. The hook `invalidCode(User $user, ?EnrollmentState $state =
+  null)` gets the enrollment step the code is for.
+- `Challenge\Context`: the contexts of challenges as constants (`LOGIN`, `ENABLE`, `DISABLE`, `SWITCH`,
+  `REBIND`, `REGENERATE`, `ENROLL`, `FALLBACK`).
+- `Channels\UserMethod` (`TwoFactor::methodFor()`) is public API: the state of the user's method
+  (`active`, `proof`, `unavailable`, `none`).
+- `routes.profile_throttle` (`'30,1'`): a per-user throttle of the actions of the two-factor profile
+  screen.
 - A warning in the log (`local`/`testing`) when `session.driver` is `cookie`.
 
 ### Changed
@@ -79,6 +89,16 @@ applications with e-mail codes only the upgrade is `composer require` and `php a
   registered, otherwise none (one rule for both).
 - `channels.email.class` is renamed to `channels.email.driver`; `class` is still read when `driver` is
   not set.
+- `VerifierChannel::enrollmentView()` and `enrollmentData()` have defaults (`null`, `[]`), as in
+  `DeliveryChannel`.
+- Enabling 2FA in the profile asks for the current password with the first code. A user whose 2FA is
+  disabled but who still has a set-up method with data of its driver can enable only that method again
+  (a new setup) instead of silently replacing it with another one.
+- A setup at sign-in with the password only (no confirmed method) no longer offers "Trust this device";
+  after the proof with a code it still does.
+- A driver of an allowed channel that cannot be created (`channels.<name>.driver` is not a subclass of a
+  base class, the factory fails) is found at boot: an exception in `local`/`testing`, elsewhere a warning
+  and the channel is ignored like a name without a driver.
 - `orchid-2fa:reset`: the `email` argument is optional and exclusive with `--channel`; a reset also
   removes the driver's data and the recovery codes and clears the per-user limits.
 - An e-mail change no longer drops the confirmation of a user whose method is not e-mail.
@@ -89,6 +109,8 @@ applications with e-mail codes only the upgrade is `composer require` and `php a
 ### Deprecated
 
 - `channels.<name>.class` (use `channels.<name>.driver`); removed in 0.3.
+- `TwoFactorChallengeSent::CONTEXT_LOGIN`, `CONTEXT_ENABLE`, `CONTEXT_DISABLE` (use `Challenge\Context`);
+  removed in 0.3.
 
 ### Removed
 
@@ -99,8 +121,15 @@ applications with e-mail codes only the upgrade is `composer require` and `php a
 
 ### Security
 
-- Changing the second factor from a stolen session needs the current password: changing the method,
-  setting it up again, disabling and new recovery codes; enforced users still cannot disable 2FA.
+- A setup step at sign-in no longer replaces a method the user got after the step had started: a step
+  started without a method (password only) or after the proof checks the user's method on every
+  request, and a method set up meanwhile (e.g. by the owner in another browser) ends it; the recovery
+  codes step of a setup ends when the method was reset or changed meanwhile. A setup over a recorded
+  method signs out of the trusted devices. (Found in the review of 0.2.0 before the release: someone
+  with the password could keep a setup step open and replace the owner's freshly set-up method, its
+  recovery codes included.)
+- Changing the second factor from a stolen session needs the current password: enabling, changing the
+  method, setting it up again, disabling and new recovery codes; enforced users still cannot disable 2FA.
 - Setting up a method at sign-in requires a code of the confirmed method first when one exists, so a
   narrowed `channels.allowed` does not let someone with the password bind their own method.
 - Attempts of every channel are counted before the driver is called; a challenge of another channel is
@@ -109,6 +138,20 @@ applications with e-mail codes only the upgrade is `composer require` and `php a
 - A trusted device cookie replaces the code only for the user's current allowed method, and a sign-in
   with a recovery code never issues one.
 - The owner is notified when someone with the password is guessing the code.
+- Parameters of the core carrying a code, a recovery code or a secret are `#[\SensitiveParameter]`:
+  a logged trace of a driver exception (with arguments when `zend.exception_ignore_args=0`) no longer
+  shows the code in the core's frames. The attribute is not inherited: a driver marks its own
+  parameters (see "Writing a channel").
+
+### Fixed
+
+- Before the release (review of 0.2.0): "Disable" and the other changes in the profile of a user whose
+  driver was removed answered 500 (now a message, enabling still works); the attempts of a setup step
+  were counted only `code.ttl` while the step lives `enrollment_ttl` (`profile.confirmation_ttl` in the
+  profile); "Send again" of the setup step of an authenticator app generated a new secret behind the
+  shown QR code; the proof with a no longer allowed method confirmed the record before the new method
+  was set up; an exception of a driver's `confirmEnrollment()` answered 500 instead of counting as a
+  wrong code.
 
 ### Upgrade notes
 

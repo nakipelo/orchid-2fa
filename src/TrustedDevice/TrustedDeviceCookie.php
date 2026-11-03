@@ -110,7 +110,7 @@ class TrustedDeviceCookie
         return $this->cookie($this->name($userId), '', now()->subYears(5)->getTimestamp());
     }
 
-    protected function isValid(mixed $value, Authenticatable $user, ?TwoFactorAuthentication $record): bool
+    protected function isValid(#[\SensitiveParameter] mixed $value, Authenticatable $user, ?TwoFactorAuthentication $record): bool
     {
         // No record: no cookie was ever issued for this record. Not confirmed: the address changed
         // or the user signed in without the second factor after the cookie was issued (spec §4.5, §4.9).
@@ -142,7 +142,7 @@ class TrustedDeviceCookie
      * HttpOnly, SameSite=Lax, path = the Orchid prefix. `Secure` follows `session.secure`;
      * when it is not set (null), Symfony applies the request scheme when sending the response.
      */
-    protected function cookie(string $name, string $value, int $expires): Cookie
+    protected function cookie(string $name, #[\SensitiveParameter] string $value, int $expires): Cookie
     {
         $secure = $this->config->get('session.secure');
         $domain = $this->config->get('session.domain');

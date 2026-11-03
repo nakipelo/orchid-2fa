@@ -67,20 +67,21 @@ it('enrolls a user without a method only with the password (A) and shows the cod
         ->and(app(RecoveryCodes::class)->remaining($user))->toBe(8);
     Event::assertDispatched(TwoFactorChannelChanged::class, fn ($event) => $event->from === null && $event->to === 'fake' && $event->reason === 'enrolled');
 
+    // Protected by the password only (A): no trust checkbox, no cookie even when asked for.
     $codes = session('orchid-2fa.recovery_codes.codes');
     $this->get(route('platform.two-factor.recovery-codes'))
         ->assertOk()
         ->assertSee($codes[0])
-        ->assertSee('name="trust_device"', false)
+        ->assertDontSee('name="trust_device"', false)
         ->assertSee('I have saved the codes');
 
     $response = $this->post(route('platform.two-factor.recovery-codes.confirm'), ['trust_device' => '1']);
 
     $response->assertRedirect(route('platform.main'))
-        ->assertCookie(app(TrustedDeviceCookie::class)->name($user->id));
+        ->assertCookieMissing(app(TrustedDeviceCookie::class)->name($user->id));
     $this->assertAuthenticatedAs($user);
     expect(session()->has('orchid-2fa.recovery_codes'))->toBeFalse();
-    Event::assertDispatched(TwoFactorPassed::class, fn ($event) => $event->via === 'enrollment' && $event->trustedDeviceIssued && $event->channel === 'fake');
+    Event::assertDispatched(TwoFactorPassed::class, fn ($event) => $event->via === 'enrollment' && ! $event->trustedDeviceIssued && $event->channel === 'fake');
 
     // Shown once: the codes page is gone with the pending login.
     $this->newBrowser();
@@ -100,11 +101,11 @@ it('offers a choice when several channels are allowed', function () {
         ->assertSee('Fake authenticator')
         ->assertSee('E-mail');
 
-    // E-mail: the code to the address, no recovery codes, the trust checkbox on the step.
+    // E-mail: the code to the address, no recovery codes; no trust checkbox without a method (A).
     $this->get(route('platform.two-factor.enroll', ['channel' => 'email']))
         ->assertOk()
         ->assertSee('We have sent a code to e***@example.com.')
-        ->assertSee('name="trust_device"', false);
+        ->assertDontSee('name="trust_device"', false);
 
     $this->post(route('platform.two-factor.enroll.confirm', ['channel' => 'email']), ['code' => tfLastCode()])
         ->assertRedirect(route('platform.main'));

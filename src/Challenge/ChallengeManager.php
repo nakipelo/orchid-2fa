@@ -10,6 +10,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Log\LogManager;
+use InvalidArgumentException;
 use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
 use Nakipelo\Orchid2FA\Channels\DeliveryChannel;
 use Nakipelo\Orchid2FA\Channels\VerifierChannel;
@@ -99,7 +100,7 @@ class ChallengeManager
      */
     public function issue(
         Authenticatable $user,
-        string $context = TwoFactorChallengeSent::CONTEXT_LOGIN,
+        string $context = Context::LOGIN,
         ?TwoFactorChannel $channel = null,
     ): Challenge {
         $channel ??= $this->channelFor($user);
@@ -150,7 +151,7 @@ class ChallengeManager
      * closes parallel guessing; a challenge of another channel than the user's is `Expired`
      * (except the e-mail fallback of a verifier channel, spec 0.2 §13).
      */
-    public function verify(Authenticatable $user, Challenge $challenge, string $code): VerificationResult
+    public function verify(Authenticatable $user, Challenge $challenge, #[\SensitiveParameter] string $code): VerificationResult
     {
         $this->lockout = null;
         $channel = $this->challengeChannel($user, $challenge);
@@ -178,7 +179,7 @@ class ChallengeManager
      * daily ceiling. A correct code is consumed, `RecoveryCodeUsed` is fired and the user gets a
      * security notice.
      */
-    public function verifyRecoveryCode(Authenticatable $user, Challenge $challenge, string $code): VerificationResult
+    public function verifyRecoveryCode(Authenticatable $user, Challenge $challenge, #[\SensitiveParameter] string $code): VerificationResult
     {
         $this->lockout = null;
         $channel = $this->channelOrNull($user);
@@ -200,7 +201,7 @@ class ChallengeManager
 
         if ($result === VerificationResult::Passed) {
             $remaining = $this->recoveryCodes->remaining($user);
-            $context = $challenge->context === TwoFactorChallengeSent::CONTEXT_LOGIN
+            $context = $challenge->context === Context::LOGIN
                 ? RecoveryCodeUsed::CONTEXT_LOGIN
                 : RecoveryCodeUsed::CONTEXT_PROFILE;
 
@@ -225,12 +226,18 @@ class ChallengeManager
         $this->lockout = null;
         $channel = $this->channelOrNull($user);
 
-        if ($channel === null || ($challenge->channel !== $channel->name() && ! $this->channels->has($challenge->channel))) {
-            return VerificationResult::Expired;
+        if ($channel === null || $challenge->channel !== $channel->name()) {
+            // The challenge of another channel: the enrollment step of the target channel (enabling,
+            // a user without a method, spec 0.2 §5.5) or a fallback code.
+            try {
+                $channel = $this->channels->has($challenge->channel) ? $this->channels->channel($challenge->channel) : null;
+            } catch (InvalidArgumentException) {
+                $channel = null;
+            }
         }
 
-        if ($challenge->channel !== $channel->name()) {
-            $channel = $this->channels->channel($challenge->channel);
+        if ($channel === null) {
+            return VerificationResult::Expired;
         }
 
         return $this->attempt($user, $channel, $challenge, $userCounters, null, static fn (): VerificationResult => VerificationResult::Invalid);
@@ -253,7 +260,7 @@ class ChallengeManager
      * of the step (a delivery channel: its code), for a verifier channel also the window and the daily
      * ceiling of the user. The driver stores its data only when the code is correct.
      */
-    public function confirmEnrollment(Authenticatable $user, TwoFactorChannel $channel, EnrollmentState $state, string $code): VerificationResult
+    public function confirmEnrollment(Authenticatable $user, TwoFactorChannel $channel, EnrollmentState $state, #[\SensitiveParameter] string $code): VerificationResult
     {
         $this->lockout = null;
 
@@ -264,7 +271,19 @@ class ChallengeManager
             ! $channel->requiresDelivery(),
             TwoFactorFailed::INVALID_CODE,
             static fn (): VerificationResult => $channel->confirmEnrollment($user, $state, $code),
+            max($this->codeTtl(), $this->enrollmentStepTtl($state)),
         );
+    }
+
+    /**
+     * The lifetime of an enrollment step (spec 0.2 §4.1): `enrollment_ttl` at the login,
+     * `profile.confirmation_ttl` in the profile. Its attempts are counted as long as the step lives.
+     */
+    protected function enrollmentStepTtl(EnrollmentState $state): int
+    {
+        return $state->context === Context::ENROLL
+            ? max(1, (int) $this->config->get('orchid-2fa.enrollment_ttl', 900))
+            : max(1, (int) $this->config->get('orchid-2fa.profile.confirmation_ttl', 600));
     }
 
     /**
@@ -396,8 +415,12 @@ class ChallengeManager
      * Count the attempt and ask the channel (`$check`): the counters are incremented before, and
      * the channel is not asked when any of them is exhausted.
      *
+     * An exception of `$check` (e.g. of a driver's confirmEnrollment()) is logged without the code and
+     * counts as a wrong code (fail-closed, as VerifierChannel::verify()).
+     *
      * @param  string|null  $invalidReason  the reason of `TwoFactorFailed` for a wrong code; null — no event
      * @param  Closure(): VerificationResult  $check
+     * @param  int|null  $decay  lifetime of the per-challenge counter, s; null — `code.ttl`
      */
     protected function attempt(
         Authenticatable $user,
@@ -406,6 +429,7 @@ class ChallengeManager
         bool $userCounters,
         ?string $invalidReason,
         Closure $check,
+        ?int $decay = null,
     ): VerificationResult {
         $userId = $user->getAuthIdentifier();
         $windowKey = Keys::verifierWindow($userId);
@@ -417,7 +441,7 @@ class ChallengeManager
         }
 
         $attemptsKey = $this->attemptsKey($user, $challenge);
-        $attempts = $this->limiter->hit($attemptsKey, $this->codeTtl());
+        $attempts = $this->limiter->hit($attemptsKey, $decay ?? $this->codeTtl());
 
         if ($userCounters) {
             $this->limiter->hit($windowKey, $this->userDecay());
@@ -437,7 +461,18 @@ class ChallengeManager
             return $this->fail($user, $channel, TwoFactorFailed::EXPIRED, VerificationResult::Expired);
         }
 
-        $result = $check();
+        try {
+            $result = $check();
+        } catch (Throwable $e) {
+            $this->logger()->error('nakipelo/orchid-2fa: the two-factor channel failed to check a code.', [
+                'user_id' => $user->getAuthIdentifier(),
+                'channel' => $channel->name(),
+                'context' => $challenge->context,
+                'exception' => $e,
+            ]);
+
+            $result = VerificationResult::Invalid;
+        }
 
         if ($result === VerificationResult::Passed) {
             $this->limiter->clear($attemptsKey);
@@ -550,7 +585,7 @@ class ChallengeManager
             return $channel;
         }
 
-        if ($challenge->context === TwoFactorChallengeSent::CONTEXT_FALLBACK) {
+        if ($challenge->context === Context::FALLBACK) {
             $fallback = $this->fallbackChannel($user);
 
             return $fallback !== null && $fallback->name() === $challenge->channel ? $fallback : null;

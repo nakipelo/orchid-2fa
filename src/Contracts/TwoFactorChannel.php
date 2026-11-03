@@ -59,7 +59,7 @@ interface TwoFactorChannel
      * Issue a challenge. A delivery channel checks the send limits, generates, stores and sends
      * a code; a verifier channel only returns a new id, without side effects.
      *
-     * @param  string  $context  a `TwoFactorChallengeSent::CONTEXT_*` value
+     * @param  string  $context  a `Challenge\Context` value
      *
      * @throws SendLimitExceededException
      * @throws DeliveryFailedException
@@ -71,7 +71,7 @@ interface TwoFactorChannel
      * ChallengeManager (spec 0.2 §4.4); a replayed code is `Invalid` (or `Expired` for a used
      * delivery code).
      */
-    public function verify(Authenticatable $user, Challenge $challenge, string $code): VerificationResult;
+    public function verify(Authenticatable $user, Challenge $challenge, #[\SensitiveParameter] string $code): VerificationResult;
 
     /**
      * The line of the code screen, e.g. "We have sent a code to e***@example.com." or
@@ -99,7 +99,7 @@ interface TwoFactorChannel
      * Confirm the enrollment with the first code. The driver stores its data only when the
      * code is correct.
      */
-    public function confirmEnrollment(Authenticatable $user, EnrollmentState $state, string $code): VerificationResult;
+    public function confirmEnrollment(Authenticatable $user, EnrollmentState $state, #[\SensitiveParameter] string $code): VerificationResult;
 
     /**
      * A Blade partial of the enrollment step (no `@extends`, no forms, no external resources),

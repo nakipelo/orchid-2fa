@@ -250,7 +250,7 @@ it('shows and uses the user channel on the profile screen', function () {
     expect(FakeDeliveryChannel::$sent)->toHaveCount(1)
         ->and(tfSentCodes())->toBe([]);
 
-    $this->from(route('platform.profile.two-factor'))->post($url('enable'), ['code' => FakeDeliveryChannel::lastCode()])
+    $this->from(route('platform.profile.two-factor'))->post($url('enable'), ['password' => 'password', 'code' => FakeDeliveryChannel::lastCode()])
         ->assertSessionHasNoErrors()
         ->assertSessionHas(Toast::SESSION_MESSAGE, 'Two-factor authentication is enabled.');
 

@@ -99,7 +99,7 @@ it('enables a verifier method voluntarily and shows the recovery codes once (§5
         ->assertSee('Confirm enabling')
         ->assertSee(ptUrl('enable'), false);
 
-    ptPost('enable', ['code' => FakeVerifierChannel::codeFor(ptProfileSecret($user, 'enable'))])
+    ptPost('enable', ['password' => 'password', 'code' => FakeVerifierChannel::codeFor(ptProfileSecret($user, 'enable'))])
         ->assertSessionHasNoErrors()
         ->assertSessionHas(Toast::SESSION_MESSAGE, 'Two-factor authentication is enabled.');
 
@@ -370,7 +370,7 @@ it('lets an enforced user without a method enroll one in the profile', function 
     $this->actingAs($user);
 
     ptPost('sendEnableCode');
-    ptPost('enable', ['code' => FakeVerifierChannel::codeFor(ptProfileSecret($user, 'enable'))])->assertSessionHasNoErrors();
+    ptPost('enable', ['password' => 'password', 'code' => FakeVerifierChannel::codeFor(ptProfileSecret($user, 'enable'))])->assertSessionHasNoErrors();
 
     expect(ptRecord($user)->channel)->toBe('fake')
         ->and(ptRecord($user)->enabled_at)->toBeNull();

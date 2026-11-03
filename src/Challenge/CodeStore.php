@@ -50,7 +50,7 @@ class CodeStore
         );
     }
 
-    public function hashCode(string $code, string $challengeId): string
+    public function hashCode(#[\SensitiveParameter] string $code, string $challengeId): string
     {
         return hash_hmac('sha256', $code.'|'.$challengeId, $this->secret());
     }

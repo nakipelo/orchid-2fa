@@ -18,7 +18,7 @@ final readonly class Challenge
     /**
      * @param  string  $id  random id (`Str::random(40)`)
      * @param  string  $channel  name of the channel that issued the challenge
-     * @param  string  $context  why it was issued: a `TwoFactorChallengeSent::CONTEXT_*` value
+     * @param  string  $context  why it was issued: a `Context` value
      * @param  int|null  $expiresAt  Unix time the code expires (delivery); null for a verifier channel
      */
     public function __construct(

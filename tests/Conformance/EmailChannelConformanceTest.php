@@ -55,7 +55,7 @@ class EmailChannelConformanceTest extends ChannelConformanceTestCase
         return (string) end($codes);
     }
 
-    protected function invalidCode(User $user): string
+    protected function invalidCode(User $user, ?EnrollmentState $state = null): string
     {
         $codes = Notification::sent(new AnonymousNotifiable, TwoFactorCodeNotification::class)
             ->map(fn (TwoFactorCodeNotification $notification): string => $notification->code)->all();
