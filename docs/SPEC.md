@@ -375,11 +375,11 @@ Throttle `verify`/`resend` регистрируется как `throttle:{max},{
 - **Unit-тесты:** маскирование, `CodeStore`, `TwoFactorPolicy`, `TrustedDeviceCookie`, адаптер (включая имя lock-cookie).
 - **Профиль и админка:** включение с ротацией `remember_token`, выключение с кодом, отсутствие кнопки выключения у принудительного, `TwoFactorProfileLinkLayout` в `UserProfileScreen`, пункт меню при `menu.enabled` и его отсутствие по умолчанию, сброс через Layout (с правом и без), `orchid-2fa:reset`, `orchid-2fa:rotate-remember-tokens`, `orchid:admin` → принудительный, смена e-mail и пароля через модель.
 - **Статика:** Larastan (level 8, без baseline), Pint (preset `laravel`).
-- **CI:** GitHub Actions по матрице §2 с jobs `pint`, `larastan`, `pest`. Зеркало в Gitea (`git.techbooking.ru`, push-mirror).
+- **CI:** GitHub Actions по матрице §2 с jobs `pint`, `larastan`, `pest`.
 
 ## 11. Этапы
 
-**1. Каркас.** `composer.json`, провайдер, адаптер, конфиг, миграция и модель, `HasTwoFactor`, workbench (`composer serve` поднимает Orchid с тестовым админом), Pest, Larastan, Pint, CI и зеркало.
+**1. Каркас.** `composer.json`, провайдер, адаптер, конфиг, миграция и модель, `HasTwoFactor`, workbench (`composer serve` поднимает Orchid с тестовым админом), Pest, Larastan, Pint, CI.
 Сюда же — регистрация `POST login` на контроллер пакета (на этом этапе заглушка) и обработка `platform.auth = false`.
 *Готово, когда:* CI зелёный по матрице; `composer serve` открывает админку Orchid; миграция применяется и откатывается; провайдер с не-`SessionGuard` падает с понятной ошибкой; grep по `src/` находит `platform.`, `platform::` и `Orchid\` только в `Support/Orchid.php` (проверка в CI скриптом); тесты маршрутов §10 проходят на всех версиях матрицы, включая `route:cache`, — либо, если не проходят, выбран и реализован запасной путь §5.3 и §5.3 обновлён.
 
