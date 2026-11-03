@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Nakipelo\Orchid2FA\Tests\Conformance;
 
+use Closure;
+use Illuminate\Support\Facades\DB;
 use Nakipelo\Orchid2FA\Challenge\EnrollmentState;
+use Nakipelo\Orchid2FA\Channels\VerifierChannel;
 use Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase;
 use Nakipelo\Orchid2FA\Testing\Fixtures\User;
 use Nakipelo\Orchid2FA\Tests\Fixtures\FakeVerifierChannel;
@@ -26,9 +29,16 @@ class FakeVerifierChannelConformanceTest extends ChannelConformanceTestCase
         return [FakeVerifierServiceProvider::class, RegisterFakeVerifierProvider::class];
     }
 
+    /**
+     * Secrets for the next enrollments, in this order (then random again).
+     *
+     * @var list<string>
+     */
+    private array $secrets = [];
+
     protected function enroll(User $user): void
     {
-        FakeVerifierChannel::enrollUser($user);
+        FakeVerifierChannel::enrollUser($user, array_shift($this->secrets));
     }
 
     protected function validCode(User $user): string
@@ -58,8 +68,33 @@ class FakeVerifierChannelConformanceTest extends ChannelConformanceTestCase
         $this->travel(FakeVerifierChannel::STEP)->seconds();
     }
 
+    protected function racingChannel(Closure $between): ?VerifierChannel
+    {
+        $channel = new FakeVerifierChannel;
+        $channel->between = $between;
+
+        return $channel;
+    }
+
     protected function completeEnrollmentCode(User $user, EnrollmentState $state): string
     {
         return FakeVerifierChannel::codeFor((string) $state->get('secret'));
+    }
+
+    /**
+     * Both users get the same secret, so the same code: the suite enrolls the other user again
+     * (a new secret) instead of skipping the test.
+     */
+    public function test_a_code_of_another_user_is_refused_when_the_codes_coincide(): void
+    {
+        $this->secrets = [str_repeat('s', 32), str_repeat('s', 32)];
+
+        $this->test_a_code_of_another_user_is_refused();
+
+        $this->assertSame([], $this->secrets);
+        $this->assertNotSame(
+            DB::table(FakeVerifierChannel::TABLE)->where('user_id', User::query()->where('email', 'other@example.com')->value('id'))->value('secret'),
+            str_repeat('s', 32),
+        );
     }
 }

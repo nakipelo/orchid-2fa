@@ -231,8 +231,9 @@ class ChannelRegistry
     }
 
     /**
-     * The name of the channel a record gets when it is created or its method is removed
-     * (disabling, spec 0.2 §4.8–§4.9): the default channel when it is allowed, otherwise null.
+     * The name of the channel a record gets when it is created or its method is removed (disabling,
+     * reset by an administrator or the command; spec 0.2 §4.8–§4.9, §5.10): the default channel when
+     * it is allowed and registered (allowed() contains only registered names), otherwise null.
      */
     public function initialName(): ?string
     {

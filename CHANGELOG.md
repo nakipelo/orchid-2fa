@@ -7,6 +7,121 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Version 0.2.0: channel drivers. The first external driver is
+[nakipelo/orchid-2fa-totp](https://github.com/nakipelo/orchid-2fa-totp) (authenticator apps). For
+applications with e-mail codes only the upgrade is `composer require` and `php artisan migrate`; see
+"Upgrade notes" below and "Upgrade 0.1 → 0.2" in the README.
+
+### Added
+
+- Channel drivers: the base classes `Channels\DeliveryChannel` (the server sends a code) and
+  `Channels\VerifierChannel` (the user's device generates it), the registry `Channels\ChannelRegistry`
+  with the facade `Facades\TwoFactor` (`extend()`, `channel()`, `has()`, `registered()`, `allowed()`,
+  `for()`), config `channels.<name>.driver`. `EmailChannel` is a `DeliveryChannel` and stays the
+  zero-config default.
+- `channels.allowed` (default `['email', 'totp']`): the methods users may use. Names without a driver
+  are ignored (a warning in `local`/`testing`); no allowed channel at all is an exception in
+  `local`/`testing` and a `critical` log entry with fail-closed sign-ins elsewhere. A section
+  "Orchid 2FA" in `php artisan about`.
+- One method per user, stored in `two_factor_authentications.channel`. A method that is set up but no
+  longer allowed is accepted once as a proof before setting up an allowed one; a method whose driver is
+  not installed fails closed.
+- Setting up a method at sign-in (`two-factor/enroll`, `enrollment_ttl`) for enforced users without a
+  method; JSON clients get `200 {"two_factor": true, "enroll": true, "redirect": …}` and the setup
+  routes answer JSON with `406`.
+- Recovery codes for methods that need them (8 codes `xxxx-xxxx`, hashed with the password hasher,
+  consumed atomically, shown once): at sign-in (never trusts the device), for changing the method,
+  setting it up again and disabling; "New recovery codes" in the profile; a warning when 2 or fewer
+  are left and a banner after a sign-in with a recovery code. Table `two_factor_recovery_codes`.
+- Profile: choose a method when enabling, "Change to …", "Set up again", "New recovery codes"; status
+  "Required, no method set up yet".
+- Per-user limits for verifier codes and recovery codes: `verify.user_max_attempts` (10) per
+  `verify.user_decay` (600 s) and `verify.user_max_per_day` (30); 5 wrong codes per pending sign-in of a
+  verifier channel.
+- Security notices (`Notifications\TwoFactorSecurityNotification`, `notification.security.enabled`,
+  `notification.security_class`): a method set up, changed, set up again, disabled or reset; a recovery
+  code used; someone guessing the code (the per-user limit reached, at most once per window).
+- Events `TwoFactorChannelChanged` (`enrolled`, `switched`, `rebound`, `disabled`, `reset`),
+  `RecoveryCodeUsed`, `RecoveryCodesRegenerated`; the field `channel` in all events; new values
+  `TwoFactorPassed::$via` (`recovery_code`, `enrollment`), `TwoFactorFailed::$reason`
+  (`invalid_recovery_code`, `channel_unavailable`), `TwoFactorLockedOut::$reason`
+  (`user_attempts_exceeded`, `user_daily_attempts_exceeded`), `TwoFactorChallengeSent::$context`
+  (`switch`, `rebind`, `regenerate`, `enroll`, `fallback`).
+- `orchid-2fa:reset --channel=<name>`: reset every user of a channel, also of one whose driver was
+  removed.
+- E-mail fallback for verifier channels that offer it (`two-factor/fallback`).
+- UI extension points for drivers: `label()`, `prompt()`, `codeInput()`, `challengeView()`,
+  `enrollmentView()` with `enrollmentData()`; new views `orchid-2fa::enroll`,
+  `orchid-2fa::recovery-codes` and partials.
+- The conformance suite for drivers `Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase` (needs
+  `orchestra/testbench` and PHPUnit or Pest in the driver's `require-dev`), with the hook
+  `racingChannel()` to check that the replay protection of a verifier channel is atomic.
+- A warning in the log (`local`/`testing`) when `session.driver` is `cookie`.
+
+### Changed
+
+- **Breaking:** `Contracts\TwoFactorChannel` is a new contract (`label()`, `requiresDelivery()`,
+  `needsRecoveryCodes()`, `issue()`/`verify()` with `Challenge` objects, enrollment methods, `forget()`);
+  a 0.1 channel ports by extending `DeliveryChannel`.
+- **Breaking:** `ChallengeManager::issue()`/`verify()` take and return `Challenge` instead of a
+  challenge id; `TwoFactorManager::enable()` is replaced by `commitEnrollment()`.
+- **Breaking:** `TwoFactorPassed`, `TwoFactorFailed` and `TwoFactorLockedOut` take a new last
+  constructor parameter `channel`; `TwoFactorPassed::$trustedDeviceIssued` has no default.
+- **Breaking:** `two_factor_authentications.channel` is nullable (null — no method); the method of a
+  user comes from this column, not from the config `channel`, which is now the default channel for
+  users without a method (used only when it is allowed and is a delivery channel).
+- Disabling 2FA in the profile asks for the current password together with the code; changing the
+  method, setting it up again and new recovery codes ask for both too. A wrong password counts like a
+  wrong code.
+- Disabling and a reset by an administrator fire `TwoFactorChannelChanged` and send a security notice
+  (0.1 fired nothing).
+- After disabling and after a reset the record gets the default channel when it is allowed and
+  registered, otherwise none (one rule for both).
+- `channels.email.class` is renamed to `channels.email.driver`; `class` is still read when `driver` is
+  not set.
+- `orchid-2fa:reset`: the `email` argument is optional and exclusive with `--channel`; a reset also
+  removes the driver's data and the recovery codes and clears the per-user limits.
+- An e-mail change no longer drops the confirmation of a user whose method is not e-mail.
+- The texts about "a code by e-mail" in the profile, the profile link and the reset block are
+  generalised.
+- A pending sign-in stored by 0.1.x is not accepted after the upgrade: the user signs in again.
+
+### Deprecated
+
+- `channels.<name>.class` (use `channels.<name>.driver`); removed in 0.3.
+
+### Removed
+
+- `ChallengeManager::channel()` (it ignored the user's channel): use `TwoFactor::for($user)` or
+  `TwoFactor::channel($name)`.
+- `TwoFactorManager::enable()` (see `commitEnrollment()`).
+- The default value `'email'` of the column and the model attribute `channel`.
+
+### Security
+
+- Changing the second factor from a stolen session needs the current password: changing the method,
+  setting it up again, disabling and new recovery codes; enforced users still cannot disable 2FA.
+- Setting up a method at sign-in requires a code of the confirmed method first when one exists, so a
+  narrowed `channels.allowed` does not let someone with the password bind their own method.
+- Attempts of every channel are counted before the driver is called; a challenge of another channel is
+  refused; an exception of a driver while checking a code counts as a wrong code; a missing driver
+  fails closed instead of falling back to e-mail.
+- A trusted device cookie replaces the code only for the user's current allowed method, and a sign-in
+  with a recovery code never issues one.
+- The owner is notified when someone with the password is guessing the code.
+
+### Upgrade notes
+
+- `php artisan migrate` (nullable `channel`, `two_factor_recovery_codes`); published 0.1 migrations
+  and a published config keep working; publish the views again to get the recovery code link.
+- Use a server-side session driver (`file`, `database`, `redis`, …).
+- If you changed the default `channel` to your own channel in 0.1, every 0.1 record still says
+  `email`: port the channel to `DeliveryChannel`, register it, allow it and update the records
+  (README, "Upgrade 0.1 → 0.2").
+- Moving all users to TOTP: install `nakipelo/orchid-2fa-totp`, migrate, set
+  `channels.allowed = ['totp']`.
+- Removing a driver: `php artisan orchid-2fa:reset --channel=<name> --force` (before or after).
+
 ## [0.1.1] - 2026-11-03
 
 Patch release after an independent review.

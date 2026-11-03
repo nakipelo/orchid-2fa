@@ -55,6 +55,26 @@ it('warns in local/testing when the user model lacks HasTwoFactor', function () 
     expect($this->logHandler()->hasWarningThatContains('does not use the Nakipelo\Orchid2FA\Concerns\HasTwoFactor trait'))->toBeTrue();
 });
 
+it('warns in local/testing when the session is kept in a cookie', function () {
+    config(['session.driver' => 'cookie']);
+
+    $this->app->register(Orchid2FAServiceProvider::class, force: true);
+
+    expect($this->logHandler()->hasWarningThatContains('[session.driver] is "cookie"'))->toBeTrue();
+});
+
+it('does not warn about the session with a server-side driver or in production', function (string $env, string $driver) {
+    config(['session.driver' => $driver]);
+    $this->app['env'] = $env;
+
+    $this->app->register(Orchid2FAServiceProvider::class, force: true);
+
+    expect($this->logHandler()->hasWarningThatContains('[session.driver]'))->toBeFalse();
+})->with([
+    'testing, file' => ['testing', 'file'],
+    'production, cookie' => ['production', 'cookie'],
+]);
+
 it('registers publish tags', function () {
     expect(ServiceProvider::pathsToPublish(Orchid2FAServiceProvider::class, 'orchid-2fa-config'))->toHaveCount(1)
         ->and(ServiceProvider::pathsToPublish(Orchid2FAServiceProvider::class, 'orchid-2fa-migrations'))->toHaveCount(1);

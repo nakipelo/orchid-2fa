@@ -6,6 +6,8 @@ env:
   - APP_ENV=local
   - APP_DEBUG=true
   - DB_CONNECTION=sqlite
+  # The session must stay on the server (spec 0.2 §9): Testbench defaults to "cookie".
+  - SESSION_DRIVER=file
   - MAIL_MAILER=log
   - SCOUT_DRIVER=null
 

@@ -85,6 +85,7 @@ it('shows the enabled status with the disable button', function () {
         ->get(pfUrl())
         ->assertOk()
         ->assertSee('Enabled')
+        ->assertSee('Disabling it is confirmed with your current password and a code.')
         ->assertSee('u***@example.com (confirmed)')
         ->assertSee(pfUrl('sendDisableCode'), false)
         ->assertDontSee(pfUrl('sendEnableCode'), false);

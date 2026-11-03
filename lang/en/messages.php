@@ -89,7 +89,7 @@ return [
         'unconfirmed' => ':destination (not confirmed yet: the next sign-in confirms it)',
         'status_description' => [
             'required' => 'Two-factor authentication is required for your account and cannot be disabled.',
-            'enabled' => 'You have enabled two-factor authentication. Disabling it is confirmed with a code.',
+            'enabled' => 'You have enabled two-factor authentication. Disabling it is confirmed with your current password and a code.',
             'disabled' => 'Enable two-factor authentication to protect your account. Enabling it is confirmed with a code.',
             'not_enrolled' => 'Two-factor authentication is required for your account: set up a method.',
         ],

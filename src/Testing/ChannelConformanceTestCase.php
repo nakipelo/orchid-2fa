@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Nakipelo\Orchid2FA\Testing;
 
+use Closure;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Foundation\Application;
@@ -19,6 +20,7 @@ use Monolog\Logger;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Challenge\EnrollmentState;
 use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
+use Nakipelo\Orchid2FA\Channels\VerifierChannel;
 use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Orchid2FAServiceProvider;
@@ -108,6 +110,51 @@ abstract class ChannelConformanceTestCase extends TestCase
      * The code that completes the enrollment step started with `$state`.
      */
     abstract protected function completeEnrollmentCode(User $user, EnrollmentState $state): string;
+
+    /**
+     * A second instance of the verifier channel under test that calls `$between` once in the middle
+     * of its verification of a code: after it has read what decides whether the code may be accepted
+     * (e.g. the last accepted time step) and before it writes the code as used. The suite verifies the
+     * same code through the registry inside `$between`, i.e. a second request runs entirely between the
+     * read and the write of the first, and exactly one of them must pass (spec 0.2 §4.2, §9 "Replay").
+     *
+     * The default null skips that test: the suite cannot reach inside verifyCode(). A verifier driver
+     * overrides it with a subclass that runs the callback at that point (here the driver reads the
+     * row in a method `matchingStep()` and writes it right after), for example:
+     *
+     *     protected function racingChannel(Closure $between): ?VerifierChannel
+     *     {
+     *         $channel = new class extends MyChannel
+     *         {
+     *             public ?Closure $between = null;
+     *
+     *             protected function matchingStep(string $secret, string $code, ?int $lastStep): ?int
+     *             {
+     *                 $step = parent::matchingStep($secret, $code, $lastStep);
+     *                 [$between, $this->between] = [$this->between, null];
+     *
+     *                 if ($between !== null) {
+     *                     $between();
+     *                 }
+     *
+     *                 return $step;
+     *             }
+     *         };
+     *         $channel->between = $between;
+     *
+     *         return $channel;
+     *     }
+     *
+     * The suite boots the returned channel with the name and config of the channel under test.
+     * A delivery channel needs nothing: its verify() is the final one of DeliveryChannel, which
+     * claims the code atomically.
+     *
+     * @param  Closure(): void  $between
+     */
+    protected function racingChannel(Closure $between): ?VerifierChannel
+    {
+        return null;
+    }
 
     protected function setUp(): void
     {

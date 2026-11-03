@@ -82,6 +82,7 @@ class Orchid2FAServiceProvider extends ServiceProvider
             $this->registerProfileRoutes();
             $this->registerMenu();
             $this->warnAboutMissingTrait();
+            $this->warnAboutCookieSessions();
         });
     }
 
@@ -289,6 +290,25 @@ class Orchid2FAServiceProvider extends ServiceProvider
     protected function localRouteName(string $name): string
     {
         return Str::after($name, Orchid::routeNamePrefix());
+    }
+
+    /**
+     * Only in local/testing, like the other warnings: the pending login, the enrollment step (the
+     * secret of a verifier channel before it is confirmed) and the recovery codes shown once are kept
+     * in the session, which must stay on the server (spec 0.2 §9). The cookie driver sends them to the
+     * browser, and a session larger than a cookie (4 KB) is silently lost.
+     */
+    protected function warnAboutCookieSessions(): void
+    {
+        if (! $this->app->environment('local', 'testing') || config('session.driver') !== 'cookie') {
+            return;
+        }
+
+        Log::warning(
+            'nakipelo/orchid-2fa: [session.driver] is "cookie", so the pending login, the enrollment secret '
+            .'and the recovery codes are stored in the browser, and a session over 4 KB is silently lost. '
+            .'Use a server-side session driver (file, database, redis, ...).'
+        );
     }
 
     protected function warnAboutMissingTrait(): void

@@ -1,6 +1,6 @@
 {
     "name": "nakipelo/orchid-2fa",
-    "description": "Two-factor authentication for the Laravel Orchid admin panel: a one-time code by e-mail at password login, trusted devices, profile screen and admin reset.",
+    "description": "Two-factor authentication for the Laravel Orchid admin panel with channel drivers: e-mail codes out of the box, TOTP and other methods as separate packages; recovery codes, trusted devices, profile screen and admin reset.",
     "type": "library",
     "license": "MIT",
     "homepage": "https://github.com/nakipelo/orchid-2fa",
@@ -22,7 +22,10 @@
         "two-factor",
         "two-factor-authentication",
         "otp",
+        "totp",
         "email",
+        "recovery-codes",
+        "drivers",
         "authentication",
         "security"
     ],
@@ -39,6 +42,7 @@
         "pestphp/pest-plugin-laravel": "^3.0 || ^4.0"
     },
     "suggest": {
+        "nakipelo/orchid-2fa-totp": "TOTP (Google Authenticator) channel — an authenticator app instead of e-mail codes",
         "orchestra/testbench": "Required by the conformance suite Nakipelo\\Orchid2FA\\Testing for channel drivers (add it to require-dev of the driver)",
         "phpunit/phpunit": "Runs the conformance suite Nakipelo\\Orchid2FA\\Testing (or pestphp/pest)"
     },

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Nakipelo\Orchid2FA\Testing\Concerns;
 
+use Nakipelo\Orchid2FA\Challenge\Challenge;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
 use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Support\Orchid;
@@ -11,7 +12,8 @@ use Nakipelo\Orchid2FA\Testing\ChannelConformanceTestCase;
 
 /**
  * Bypasses (spec §9 of 0.1, 0.2 §9): no pending login, a user id in the body, a replayed code in
- * another session, a code verified twice.
+ * another session, a code verified twice one after another and two verifications of a code that
+ * interleave (the latter needs ChannelConformanceTestCase::racingChannel() of a verifier driver).
  *
  * @mixin ChannelConformanceTestCase
  */
@@ -60,15 +62,56 @@ trait TestsBypasses
         }
     }
 
+    /**
+     * The same code verified twice, one request after the other. This does not prove atomicity: a
+     * driver that reads and then writes without a condition passes it; see the next test.
+     */
     public function test_a_code_is_accepted_only_once(): void
     {
         $user = $this->enrolledUser();
         $first = $this->challenges()->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
         $code = $this->validCode($user);
-        // The parallel request carries the same challenge (delivery) or its own one (verifier).
+        // The second request carries the same challenge (delivery) or its own one (verifier).
         $second = $this->isDelivery() ? $first : $this->challenges()->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $this->channel());
 
         $this->assertSame(VerificationResult::Passed, $this->challenges()->verify($user, $first, $code));
         $this->assertNotSame(VerificationResult::Passed, $this->challenges()->verify($user, $second, $code));
+    }
+
+    /**
+     * Two verifications of the same code that interleave: the second one runs entirely between the
+     * read and the write of the first (ChannelConformanceTestCase::racingChannel()). Exactly one of
+     * them passes: the replay protection of a verifier driver must be atomic (spec 0.2 §4.2).
+     */
+    public function test_interleaved_verifications_of_a_code_let_only_one_pass(): void
+    {
+        if ($this->isDelivery()) {
+            $this->markTestSkipped('A delivery channel is verified by the final DeliveryChannel::verify(), which claims the code atomically.');
+        }
+
+        $user = $this->enrolledUser();
+        $code = $this->validCode($user);
+        $second = null;
+
+        $racing = $this->racingChannel(function () use (&$second, $user, $code): void {
+            $channel = $this->channel();
+            $second = $channel->verify($user, Challenge::make($channel->name(), TwoFactorChallengeSent::CONTEXT_LOGIN), $code);
+        });
+
+        if ($racing === null) {
+            $this->markTestSkipped('Override racingChannel() to check that the replay protection of the channel is atomic.');
+        }
+
+        $racing->bootChannel($this->channelName(), (array) config('orchid-2fa.channels.'.$this->channelName(), []));
+        $this->assertNotSame($this->channel(), $racing, 'racingChannel() must return a new instance, not the one of the registry.');
+
+        $first = $racing->verify($user, Challenge::make($this->channelName(), TwoFactorChallengeSent::CONTEXT_LOGIN), $code);
+
+        $this->assertNotNull($second, 'The channel of racingChannel() did not call the callback while verifying the code.');
+        $this->assertSame(
+            1,
+            count(array_filter([$first, $second], fn (VerificationResult $result): bool => $result === VerificationResult::Passed)),
+            sprintf('Two interleaved verifications of one code must let exactly one pass; got %s (outer) and %s (inner).', $first->name, $second->name),
+        );
     }
 }

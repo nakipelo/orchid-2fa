@@ -78,6 +78,28 @@ it('resets to no method when e-mail is not allowed, so the next login enrolls on
     tfLogin()->assertRedirect(route('platform.two-factor.enroll'));
 });
 
+/*
+ * One rule for disabling (§4.8, §5.8) and a reset (§5.10): the record gets the default channel
+ * (`orchid-2fa.channel`) when it is allowed and registered, otherwise null.
+ */
+it('gives the record the default channel after a reset and after disabling', function (string $operation, string $default, array $allowed, ?string $expected) {
+    config(['orchid-2fa.channel' => $default, 'orchid-2fa.channels.allowed' => $allowed]);
+    $user = tfFakeUser(enforced: $operation === 'reset');
+
+    app(TwoFactorManager::class)->{$operation}($user);
+
+    expect(rcRecord($user)->channel)->toBe($expected);
+})->with([
+    'reset, default e-mail' => ['reset', 'email', ['email', 'fake'], 'email'],
+    'disable, default e-mail' => ['disable', 'email', ['email', 'fake'], 'email'],
+    'reset, default fake' => ['reset', 'fake', ['email', 'fake'], 'fake'],
+    'disable, default fake' => ['disable', 'fake', ['email', 'fake'], 'fake'],
+    'reset, default not allowed' => ['reset', 'email', ['fake'], null],
+    'disable, default not allowed' => ['disable', 'email', ['fake'], null],
+    'reset, default allowed but not registered' => ['reset', 'sms', ['sms', 'email', 'fake'], null],
+    'disable, default allowed but not registered' => ['disable', 'sms', ['sms', 'email', 'fake'], null],
+]);
+
 it('does not send the security notice when it is disabled', function () {
     config(['orchid-2fa.notification.security.enabled' => false]);
 

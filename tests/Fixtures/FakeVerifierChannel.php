@@ -36,6 +36,12 @@ class FakeVerifierChannel extends VerifierChannel
      */
     public static ?\Throwable $failWith = null;
 
+    /**
+     * Called once between the read and the write of verifyCode() (the race test of the conformance
+     * suite, ChannelConformanceTestCase::racingChannel()).
+     */
+    public ?\Closure $between = null;
+
     public static function register(): void
     {
         self::$emailFallback = false;
@@ -83,11 +89,25 @@ class FakeVerifierChannel extends VerifierChannel
             return false;
         }
 
+        $this->interleave();
+
         // Replay protection: only a step after the last accepted one, atomically.
         return DB::table(self::TABLE)
             ->where('user_id', $user->getAuthIdentifier())
             ->where(fn ($query) => $query->whereNull('last_step')->orWhere('last_step', '<', $step))
             ->update(['last_step' => $step, 'updated_at' => now()]) === 1;
+    }
+
+    /**
+     * Run the callback of a race test once, if any.
+     */
+    protected function interleave(): void
+    {
+        [$between, $this->between] = [$this->between, null];
+
+        if ($between !== null) {
+            $between();
+        }
     }
 
     public function startEnrollment(Authenticatable $user, EnrollmentState $state): void

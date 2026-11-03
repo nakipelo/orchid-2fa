@@ -102,7 +102,8 @@ class TwoFactorManager
     /**
      * Voluntary disabling after the confirmation with the current method and the password
      * (spec 0.2 §5.8): `enabled_at = confirmed_at = null`, the trusted devices are invalidated, the
-     * driver's data and the recovery codes are erased, the channel becomes the default one (or null),
+     * driver's data and the recovery codes are erased, the channel becomes the default one when it is
+     * allowed and registered, otherwise null (ChannelRegistry::initialName(), as a reset),
      * `TwoFactorChannelChanged(disabled)` and the security notice.
      */
     public function disable(Authenticatable $user): void
@@ -132,8 +133,9 @@ class TwoFactorManager
      * Reset by an administrator (spec §4.8 of 0.1, §5.10 of 0.2): as disabling, plus the active code
      * and all counters are removed and the remember token is rotated. The driver's data are erased
      * when its driver is registered (otherwise only the data of this package, with a warning); the
-     * channel becomes `email` when it is allowed, otherwise null (the next login of an enforced user
-     * enrolls a method). Fires `TwoFactorChannelChanged(reset)` and sends the security notice.
+     * channel becomes the default one when it is allowed and registered, otherwise null — the same
+     * rule as disabling (ChannelRegistry::initialName()); the next login of an enforced user then
+     * enrolls a method. Fires `TwoFactorChannelChanged(reset)` and sends the security notice.
      */
     public function reset(Authenticatable $user): void
     {
@@ -145,7 +147,7 @@ class TwoFactorManager
                 ->update([
                     'enabled_at' => null,
                     'confirmed_at' => null,
-                    'channel' => $this->channels->isAllowed('email') ? 'email' : null,
+                    'channel' => $this->channels->initialName(),
                 ]);
 
             $this->forgetTrustedDevices($user);
