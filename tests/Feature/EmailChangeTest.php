@@ -76,7 +76,7 @@ class CustomEmailChangedNotification extends BaseNotification
 }
 
 /**
- * The e-mail channel of an application (`channels.email.class`) that records the notices it sends.
+ * The e-mail channel of an application (`channels.email.driver`) that records the notices it sends.
  */
 class RecordingEmailChannel extends EmailChannel
 {
@@ -203,7 +203,7 @@ it('uses the configured notification class', function () {
 });
 
 it('sends the notice through the configured e-mail channel class', function () {
-    config(['orchid-2fa.channels.email.class' => RecordingEmailChannel::class]);
+    config(['orchid-2fa.channels.email.driver' => RecordingEmailChannel::class]);
     RecordingEmailChannel::$sent = [];
     $user = ecEnabledUser();
 

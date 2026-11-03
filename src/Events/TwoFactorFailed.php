@@ -6,6 +6,10 @@ namespace Nakipelo\Orchid2FA\Events;
 
 use Illuminate\Contracts\Auth\Authenticatable;
 
+/**
+ * A code was refused or could not be delivered. `channel` (0.2) is the name of the channel of
+ * the challenge.
+ */
 final class TwoFactorFailed extends TwoFactorEvent
 {
     public const INVALID_CODE = 'invalid_code';
@@ -21,6 +25,7 @@ final class TwoFactorFailed extends TwoFactorEvent
         Authenticatable $user,
         string $guard,
         public readonly string $reason,
+        public readonly string $channel,
     ) {
         parent::__construct($user, $guard);
     }

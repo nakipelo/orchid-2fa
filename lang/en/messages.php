@@ -8,6 +8,7 @@ return [
         'title' => 'Two-factor authentication',
         'heading' => 'Enter the verification code',
         'sent_to' => 'We have sent a code to :destination.',
+        'app_prompt' => 'Enter the code from your authenticator app.',
         'code' => 'Verification code',
         'submit' => 'Sign in',
         'resend' => 'Send the code again',
@@ -15,6 +16,10 @@ return [
         'resent' => 'A new code has been sent.',
         'another_user' => 'Sign in as a different user',
         'trust_device' => 'Trust this device for :days day|Trust this device for :days days',
+    ],
+
+    'channels' => [
+        'email' => 'E-mail',
     ],
 
     'errors' => [

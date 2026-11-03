@@ -159,7 +159,7 @@ it('counts the attempt before comparing', function () {
     $code = tfLastCode();
 
     // Parallel wrong guesses already used up the attempts: even the right code is refused.
-    $key = 'orchid-2fa:verify:'.$user->id.':'.$challenge;
+    $key = 'orchid-2fa:verify:'.$user->id.':'.$challenge->id;
     foreach (range(1, 5) as $i) {
         app(RateLimiter::class)->hit($key, 600);
     }

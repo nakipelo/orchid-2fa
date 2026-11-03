@@ -57,9 +57,9 @@ it('stores only an HMAC of the code', function () {
 
     $raw = cache()->get('orchid-2fa:code:'.$user->id);
     expect($raw)->toBeArray()->toHaveKeys(['hash', 'challenge_id', 'destination_hash', 'expires_at'])
-        ->and($raw['challenge_id'])->toBe($challenge)
+        ->and($raw['challenge_id'])->toBe($challenge->id)
         ->and(json_encode($raw))->not->toContain($code)
-        ->and($raw['hash'])->toBe(hash_hmac('sha256', $code.'|'.$challenge, config('app.key')))
+        ->and($raw['hash'])->toBe(hash_hmac('sha256', $code.'|'.$challenge->id, config('app.key')))
         ->and($raw['destination_hash'])->toBe(hash_hmac('sha256', 'enforced@example.com', config('app.key')));
 });
 
@@ -108,13 +108,13 @@ it('generates codes of the configured length with leading zeros', function () {
 
 it('keeps the pending login in the session', function () {
     $session = app('session')->driver();
-    $pending = new PendingLogin(5, true, now()->getTimestamp(), 'challenge', 'fingerprint');
+    $pending = new PendingLogin(5, true, now()->getTimestamp(), 'challenge', 'fingerprint', 'email');
 
     $pending->store($session);
 
     expect($session->get('orchid-2fa.pending'))->toBe([
         'user_id' => 5, 'remember' => true, 'created_at' => now()->getTimestamp(), 'challenge_id' => 'challenge',
-        'password_hash' => 'fingerprint',
+        'password_hash' => 'fingerprint', 'channel' => 'email',
     ])
         ->and(PendingLogin::fromSession($session))->toEqual($pending)
         ->and($pending->isExpired(600))->toBeFalse()
@@ -139,7 +139,7 @@ it('keeps the pending login in the session', function () {
 
 it('binds the pending login to the password without keeping the hash', function () {
     $user = tfUser();
-    $pending = PendingLogin::for($user, false, 'challenge');
+    $pending = PendingLogin::for($user, false, 'challenge', 'email');
 
     expect($pending->userId)->toBe($user->id)
         ->and($pending->passwordHash)->toBe(hash_hmac('sha256', $user->password, (string) config('app.key')))

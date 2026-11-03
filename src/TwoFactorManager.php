@@ -7,12 +7,15 @@ namespace Nakipelo\Orchid2FA;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Log\LogManager;
 use Illuminate\Notifications\Notification;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
+use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
 use Nakipelo\Orchid2FA\Channels\EmailChannel;
+use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Notifications\TwoFactorEmailChangedNotification;
@@ -33,13 +36,17 @@ class TwoFactorManager
         protected ChallengeManager $challenges,
         protected TwoFactorPolicy $policy,
         protected LogManager $log,
+        protected ChannelRegistry $channels,
     ) {}
 
     /**
      * Voluntary enabling after a correct code: `enabled_at = confirmed_at = now()`, the channel,
      * and the remember token is rotated so that older remember cookies stop working (spec §4.5, §4.7).
+     *
+     * `$channel` is the channel whose code confirmed the enabling; by default the user's channel.
+     * Becomes `commitEnrollment()` in stage 2 of 0.2 (spec 0.2 §4.8).
      */
-    public function enable(Authenticatable $user): TwoFactorAuthentication
+    public function enable(Authenticatable $user, ?TwoFactorChannel $channel = null): TwoFactorAuthentication
     {
         $record = $this->record($user);
         $now = now();
@@ -47,7 +54,7 @@ class TwoFactorManager
         $record->forceFill([
             'enabled_at' => $now,
             'confirmed_at' => $now,
-            'channel' => $this->challenges->channel()->name(),
+            'channel' => ($channel ?? $this->channels->for($user))?->name() ?? $this->channels->defaultName(),
         ])->save();
 
         $this->rotateRememberToken($user);
@@ -108,16 +115,15 @@ class TwoFactorManager
     }
 
     /**
-     * The address of the user changed (spec §4.9): the active code is annulled, the record is no
-     * longer confirmed (the next login sends the code to the new address and confirms it), and a
-     * user with two-factor authentication gets a notice at the old address. 2FA stays enabled.
+     * The e-mail address of the user changed (spec §4.9 of 0.1, §5.11 of 0.2):
+     * destinationChanged() for the channel `email`, and a user with two-factor authentication gets
+     * a notice at the old address. 2FA stays enabled.
      *
      * A failed notice is logged and does not break the save that changed the address.
      */
     public function addressChanged(Authenticatable $user, string $oldAddress): void
     {
-        $this->challenges->annul($user);
-        $this->forgetConfirmation($user);
+        $this->destinationChanged($user, 'email', $oldAddress);
 
         if ($oldAddress === '' || ! $this->policy->requires($user)) {
             return;
@@ -136,6 +142,30 @@ class TwoFactorManager
                     'exception' => $e,
                 ]);
         }
+    }
+
+    /**
+     * The destination of a delivery channel changed (spec 0.2 §5.11): the active code is annulled
+     * (it was bound to the old destination); the record is no longer confirmed only when its
+     * channel is this one (for `email` also a record without a channel), so the next login sends
+     * the code to the new destination and confirms it. The method of a user of another channel
+     * (e.g. TOTP) and its confirmation are not touched.
+     */
+    public function destinationChanged(Authenticatable $user, string $channel, string $oldDestination): void
+    {
+        $this->challenges->annul($user);
+
+        TwoFactorAuthentication::query()
+            ->where('user_id', $user->getAuthIdentifier())
+            ->whereNotNull('confirmed_at')
+            ->where(function (Builder $query) use ($channel): void {
+                $query->where('channel', $channel);
+
+                if ($channel === 'email') {
+                    $query->orWhereNull('channel');
+                }
+            })
+            ->update(['confirmed_at' => null]);
     }
 
     /**
@@ -161,19 +191,19 @@ class TwoFactorManager
     }
 
     /**
-     * The e-mail channel of `channels.email.class`, the same class that sends the codes; the base
-     * EmailChannel if the configured class does not extend it (the notice is always an e-mail).
+     * The channel `email` of the registry, the same one that sends the codes; the base
+     * EmailChannel if it is not registered or does not extend EmailChannel (the notice is always
+     * an e-mail, spec 0.2 §4.8).
      */
     protected function emailChannel(): EmailChannel
     {
-        $class = $this->config->get('orchid-2fa.channels.email.class');
+        try {
+            $channel = $this->channels->has('email') ? $this->channels->channel('email') : null;
+        } catch (InvalidArgumentException) {
+            $channel = null;
+        }
 
-        /** @var EmailChannel $channel */
-        $channel = $this->container->make(
-            is_string($class) && is_a($class, EmailChannel::class, true) ? $class : EmailChannel::class,
-        );
-
-        return $channel;
+        return $channel instanceof EmailChannel ? $channel : $this->container->make(EmailChannel::class);
     }
 
     protected function record(Authenticatable $user): TwoFactorAuthentication

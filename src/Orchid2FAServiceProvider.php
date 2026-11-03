@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
+use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
 use Nakipelo\Orchid2FA\Concerns\HasTwoFactor;
 use Nakipelo\Orchid2FA\Console\ResetTwoFactorCommand;
 use Nakipelo\Orchid2FA\Console\RotateRememberTokensCommand;
@@ -24,6 +25,8 @@ class Orchid2FAServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/orchid-2fa.php', 'orchid-2fa');
+
+        $this->app->singleton(ChannelRegistry::class);
     }
 
     public function boot(): void

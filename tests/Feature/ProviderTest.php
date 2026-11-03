@@ -14,7 +14,7 @@ it('merges the default config', function () {
         'pending_ttl' => 600,
     ])
         ->and(config('orchid-2fa.channels.email'))->toBe([
-            'class' => 'Nakipelo\\Orchid2FA\\Channels\\EmailChannel',
+            'driver' => 'Nakipelo\\Orchid2FA\\Channels\\EmailChannel',
             'attribute' => 'email',
         ])
         ->and(config('orchid-2fa.notification'))->toBe([

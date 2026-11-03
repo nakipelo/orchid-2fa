@@ -15,6 +15,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Challenge\PendingLogin;
+use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
 use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Events\TwoFactorPassed;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
@@ -47,6 +48,7 @@ class LoginController
         protected Repository $config,
         protected TrustedDeviceCookie $trustedDevices,
         protected TwoFactorManager $manager,
+        protected ChannelRegistry $channels,
     ) {
         Orchid::redirectAuthenticatedToIndex();
     }
@@ -79,7 +81,13 @@ class LoginController
 
         // A trusted device replaces the code, never the password (spec §4.4).
         if ($this->trustedDevices->passes($request, $user, $this->policy->record($user))) {
-            $this->events->dispatch(new TwoFactorPassed($user, Orchid::guardName(), TwoFactorPassed::VIA_TRUSTED_DEVICE));
+            $this->events->dispatch(new TwoFactorPassed(
+                $user,
+                Orchid::guardName(),
+                TwoFactorPassed::VIA_TRUSTED_DEVICE,
+                false,
+                $this->channels->for($user)?->name() ?? $this->channels->defaultName(),
+            ));
 
             return $this->completeLogin($request, $user, $remember);
         }
@@ -119,23 +127,26 @@ class LoginController
         return $user;
     }
 
+    /**
+     * The code step with the channel of the user (spec 0.2 §4.5): an active code is reused,
+     * otherwise a new one is sent.
+     */
     protected function startChallenge(Request $request, Authenticatable $user, bool $remember): Response
     {
         $this->ensureRecord($user);
 
         $request->session()->regenerate();
 
-        $challengeId = $this->challenges->activeChallenge($user);
+        $channel = $this->challenges->channelFor($user);
+        $challenge = null;
         $error = null;
 
-        if ($challengeId === null) {
-            try {
-                $challengeId = $this->challenges->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN);
-            } catch (SendLimitExceededException $e) {
-                $error = $this->sendLimitMessage($e->availableIn);
-            } catch (DeliveryFailedException) {
-                $error = $this->trans('errors.delivery_failed');
-            }
+        try {
+            $challenge = $this->challenges->start($user, TwoFactorChallengeSent::CONTEXT_LOGIN, $channel);
+        } catch (SendLimitExceededException $e) {
+            $error = $this->sendLimitMessage($e->availableIn);
+        } catch (DeliveryFailedException) {
+            $error = $this->trans('errors.delivery_failed');
         }
 
         if ($error !== null) {
@@ -143,7 +154,7 @@ class LoginController
         }
 
         // Without a sent code the pending login still lets the user resend within the limits (spec §4.10).
-        PendingLogin::for($user, $remember, $challengeId ?? Str::random(40))->store($request->session());
+        PendingLogin::for($user, $remember, $challenge->id ?? Str::random(40), $channel->name())->store($request->session());
 
         $url = route(Orchid::challengeRoute());
 
@@ -155,7 +166,7 @@ class LoginController
         // to the code step, where it can resend once `resend_available_in` is over (spec §4.2).
         return new JsonResponse(['two_factor' => true, 'redirect' => $url] + ($error === null ? [] : [
             'error' => $error,
-            'resend_available_in' => $this->challenges->sendAvailableIn($user),
+            'resend_available_in' => $this->challenges->sendAvailableIn($user, $channel),
         ]));
     }
 
@@ -167,10 +178,15 @@ class LoginController
      * record, after disabling, an admin reset, an e-mail change or a sign-in without the second
      * factor, which drops the confirmation) stop working. A confirmed user keeps the remember
      * cookies issued after the code (spec §4.5).
+     *
+     * A new record gets the default channel (spec 0.2 §4.5), as the channel of 0.1 did.
      */
     protected function ensureRecord(Authenticatable $user): void
     {
-        $record = TwoFactorAuthentication::query()->createOrFirst(['user_id' => $user->getAuthIdentifier()]);
+        $record = TwoFactorAuthentication::query()->createOrFirst(
+            ['user_id' => $user->getAuthIdentifier()],
+            ['channel' => $this->channels->defaultName()],
+        );
 
         if ($record->wasRecentlyCreated || $record->confirmed_at === null) {
             $this->manager->rotateRememberToken($user);

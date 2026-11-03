@@ -16,6 +16,7 @@ use Illuminate\Validation\ValidationException;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Challenge\PendingLogin;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
+use Nakipelo\Orchid2FA\Channels\DeliveryChannel;
 use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Events\TwoFactorPassed;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
@@ -61,14 +62,15 @@ class ChallengeController
 
         [, $user] = $resolved;
 
-        $length = $this->challenges->codeLength();
+        $channel = $this->challenges->channelFor($user);
+        $input = $channel->codeInput();
 
         return view('orchid-2fa::challenge', [
             'layout' => Orchid::authLayout(),
-            'destination' => $this->challenges->channel()->maskedDestination($user),
-            'codeLength' => $length,
-            'codePattern' => '\d{'.$length.'}',
-            'resendAvailableIn' => $this->challenges->sendAvailableIn($user),
+            'destination' => $channel instanceof DeliveryChannel ? $channel->maskedDestination($user) : '',
+            'codeLength' => $input->length,
+            'codePattern' => $input->pattern,
+            'resendAvailableIn' => $this->challenges->sendAvailableIn($user, $channel),
             'verifyUrl' => route(Orchid::verifyRoute()),
             'resendUrl' => route(Orchid::resendRoute()),
             'cancelUrl' => route(Orchid::cancelRoute()),
@@ -94,13 +96,13 @@ class ChallengeController
 
         $request->validate(['code' => 'required|string|max:64']);
 
-        $result = $this->challenges->verify($user, $pending->challengeId, (string) $request->input('code'));
+        $result = $this->challenges->verify($user, $pending->challenge(), (string) $request->input('code'));
 
         if ($result !== VerificationResult::Passed) {
             throw ValidationException::withMessages([
                 'code' => match ($result) {
                     VerificationResult::Invalid => $this->trans('errors.invalid_code', [
-                        'attempts' => $this->challenges->attemptsLeft($user, $pending->challengeId),
+                        'attempts' => $this->challenges->attemptsLeft($user, $pending->challenge()),
                     ]),
                     default => $this->trans('errors.code_expired'),
                 },
@@ -117,7 +119,7 @@ class ChallengeController
             $this->trustedDevices->issue($user, $record);
         }
 
-        $this->events->dispatch(new TwoFactorPassed($user, Orchid::guardName(), TwoFactorPassed::VIA_CODE, $trust));
+        $this->events->dispatch(new TwoFactorPassed($user, Orchid::guardName(), TwoFactorPassed::VIA_CODE, $trust, $pending->channel));
 
         return $this->completeLogin($request, $user, $pending->remember);
     }
@@ -136,14 +138,14 @@ class ChallengeController
         [$pending, $user] = $resolved;
 
         try {
-            $challengeId = $this->challenges->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN);
+            $challenge = $this->challenges->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN);
         } catch (SendLimitExceededException $e) {
             return $this->sendError($request, $this->sendLimitMessage($e->availableIn));
         } catch (DeliveryFailedException) {
             return $this->sendError($request, $this->trans('errors.delivery_failed'));
         }
 
-        $pending->withChallenge($challengeId)->store($request->session());
+        $pending->withChallenge($challenge->id, $challenge->channel)->store($request->session());
 
         if ($request->wantsJson()) {
             return new JsonResponse(['resend_available_in' => $this->challenges->sendAvailableIn($user)]);

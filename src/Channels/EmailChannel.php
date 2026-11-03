@@ -14,21 +14,22 @@ use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\SendQueuedNotifications;
 use Illuminate\Support\Collection;
 use InvalidArgumentException;
-use Nakipelo\Orchid2FA\Contracts\TwoFactorChannel;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
 use Nakipelo\Orchid2FA\Notifications\TwoFactorCodeNotification;
 use ReflectionClass;
 use Throwable;
 
 /**
- * Sends the code by e-mail with the notification from `notification.class` (spec §5.2, §5.8).
+ * The default channel `email` (spec 0.2 §4.2, §4.3): sends the code by e-mail with the
+ * notification from `notification.class` (spec §5.2, §5.8 of 0.1). Can be extended by an
+ * application and registered as `channels.email.driver`.
  *
  * The notification is routed to the address from `channels.email.attribute`, so the user
  * model does not need the Notifiable trait. Without `notification.queue` it is sent
  * synchronously (even if the class implements ShouldQueue) and transport errors become
  * DeliveryFailedException (fail-closed, spec §4.10).
  */
-class EmailChannel implements TwoFactorChannel
+class EmailChannel extends DeliveryChannel
 {
     public function __construct(
         protected Repository $config,
@@ -36,14 +37,17 @@ class EmailChannel implements TwoFactorChannel
         protected BusDispatcher $bus,
     ) {}
 
+    /**
+     * The registry name; `email` for an instance created outside the registry.
+     */
     public function name(): string
     {
-        return 'email';
+        return $this->channelName ?? 'email';
     }
 
-    public function isAvailableFor(Authenticatable $user): bool
+    public function label(): string
     {
-        return $this->destination($user) !== '';
+        return (string) __('orchid-2fa::messages.channels.email');
     }
 
     public function destination(Authenticatable $user): string

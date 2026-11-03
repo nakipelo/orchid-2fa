@@ -59,7 +59,7 @@ it('writes to the configured log channel', function () {
         'logging.default' => 'null',
     ]);
 
-    app(LogTwoFactorEvents::class)->handleFailed(new TwoFactorFailed(tfEnforcedUser(), 'web', 'invalid_code'));
+    app(LogTwoFactorEvents::class)->handleFailed(new TwoFactorFailed(tfEnforcedUser(), 'web', 'invalid_code', 'email'));
 
     expect($this->logHandler()->hasWarningThatContains('Two-factor authentication failed.'))->toBeTrue();
 });

@@ -10,6 +10,7 @@ use Illuminate\Validation\ValidationException;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Challenge\ProfileChallenge;
 use Nakipelo\Orchid2FA\Challenge\VerificationResult;
+use Nakipelo\Orchid2FA\Channels\DeliveryChannel;
 use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
 use Nakipelo\Orchid2FA\Exceptions\SendLimitExceededException;
@@ -27,8 +28,8 @@ use Orchid\Support\Facades\Layout;
 /**
  * Two-factor settings of the signed-in user (route `Orchid::profileTwoFactorRoute()`, spec §4.7, §6).
  *
- * Enabling and disabling are confirmed with a code to the current address (the limits of the
- * login apply). An enforced user cannot disable it: the button is hidden and the server refuses
+ * Enabling and disabling are confirmed with a code of the user's channel (spec 0.2 §4.5, §6.3; the
+ * limits of the login apply). An enforced user cannot disable it: the button is hidden and the server refuses
  * both the code request and the confirmation.
  */
 class TwoFactorProfileScreen extends Screen
@@ -59,13 +60,14 @@ class TwoFactorProfileScreen extends Screen
         $user = $this->currentUser();
         $status = $policy->status($user);
         $pending = ProfileChallenge::fromSession($request->session(), $user->getAuthIdentifier());
+        $channel = $challenges->channelFor($user);
 
         return [
             'status' => $status,
             'confirmed' => $policy->isConfirmed($user),
-            'destination' => $challenges->channel()->maskedDestination($user),
+            'destination' => $channel instanceof DeliveryChannel ? $channel->maskedDestination($user) : '',
             'pendingAction' => $pending !== null && $this->allows($status, $pending->action) ? $pending->action : null,
-            'codeLength' => $challenges->codeLength(),
+            'codeLength' => $channel->codeInput()->length,
         ];
     }
 
@@ -182,7 +184,7 @@ class TwoFactorProfileScreen extends Screen
         $user = $this->confirmCode($request, $policy, $challenges, ProfileChallenge::ENABLE);
 
         if ($user !== null) {
-            $manager->enable($user);
+            $manager->enable($user, $challenges->channelFor($user));
             Orchid::toast($this->trans('profile.enabled'), 'success');
         }
     }
@@ -229,10 +231,12 @@ class TwoFactorProfileScreen extends Screen
             return;
         }
 
+        $channel = $challenges->channelFor($user);
+
         try {
-            $challengeId = $challenges->issue($user, $action === ProfileChallenge::ENABLE
+            $challenge = $challenges->issue($user, $action === ProfileChallenge::ENABLE
                 ? TwoFactorChallengeSent::CONTEXT_ENABLE
-                : TwoFactorChallengeSent::CONTEXT_DISABLE);
+                : TwoFactorChallengeSent::CONTEXT_DISABLE, $channel);
         } catch (SendLimitExceededException $e) {
             Orchid::toast($this->sendLimitMessage($e->availableIn), 'warning');
 
@@ -243,10 +247,10 @@ class TwoFactorProfileScreen extends Screen
             return;
         }
 
-        (new ProfileChallenge($user->getAuthIdentifier(), $action, $challengeId))->store($request->session());
+        (new ProfileChallenge($user->getAuthIdentifier(), $action, $challenge->id, $challenge->channel))->store($request->session());
 
         Orchid::toast($this->trans('profile.code_sent', [
-            'destination' => $challenges->channel()->maskedDestination($user),
+            'destination' => $channel instanceof DeliveryChannel ? $channel->maskedDestination($user) : '',
         ]));
     }
 
@@ -276,12 +280,12 @@ class TwoFactorProfileScreen extends Screen
             return null;
         }
 
-        $result = $challenges->verify($user, $challenge->challengeId, (string) $request->input('code'));
+        $result = $challenges->verify($user, $challenge->challenge(), (string) $request->input('code'));
 
         if ($result === VerificationResult::Invalid) {
             throw ValidationException::withMessages([
                 'code' => $this->trans('errors.invalid_code', [
-                    'attempts' => $challenges->attemptsLeft($user, $challenge->challengeId),
+                    'attempts' => $challenges->attemptsLeft($user, $challenge->challenge()),
                 ]),
             ]);
         }

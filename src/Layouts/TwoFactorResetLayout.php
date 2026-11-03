@@ -6,7 +6,8 @@ namespace Nakipelo\Orchid2FA\Layouts;
 
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
-use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
+use Nakipelo\Orchid2FA\Channels\ChannelRegistry;
+use Nakipelo\Orchid2FA\Channels\DeliveryChannel;
 use Nakipelo\Orchid2FA\Policy\TwoFactorPolicy;
 use Nakipelo\Orchid2FA\Support\Orchid;
 use Orchid\Screen\Actions\Button;
@@ -42,7 +43,9 @@ class TwoFactorResetLayout extends Block
 
         $policy = app(TwoFactorPolicy::class);
         $status = $policy->status($user);
-        $destination = app(ChallengeManager::class)->channel()->maskedDestination($user);
+        // The channel of the user, not the default one (spec 0.2 §4.5, §6.3); a mask only for delivery.
+        $channel = app(ChannelRegistry::class)->for($user);
+        $destination = $channel instanceof DeliveryChannel ? $channel->maskedDestination($user) : '';
 
         $this->layouts = [
             Layout::rows([

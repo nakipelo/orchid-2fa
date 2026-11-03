@@ -26,13 +26,19 @@ return [
     |--------------------------------------------------------------------------
     | Channels
     |--------------------------------------------------------------------------
+    |
+    | channel: the default channel, used for a user without a method of their
+    | own. channels.<name>.driver: a class extending DeliveryChannel or
+    | VerifierChannel, or a name registered with TwoFactor::extend(). The 0.1
+    | key "class" is still read when "driver" is not set (deprecated).
+    |
     */
 
     'channel' => 'email',
 
     'channels' => [
         'email' => [
-            'class' => EmailChannel::class,
+            'driver' => EmailChannel::class,
             'attribute' => 'email',
         ],
     ],

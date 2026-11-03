@@ -49,6 +49,7 @@ class LogTwoFactorEvents
     public function handlePassed(TwoFactorPassed $event): void
     {
         $this->logger()->info('Two-factor authentication passed.', $this->context($event, [
+            'channel' => $event->channel,
             'via' => $event->via,
             'trusted_device_issued' => $event->trustedDeviceIssued,
         ]));
@@ -57,6 +58,7 @@ class LogTwoFactorEvents
     public function handleFailed(TwoFactorFailed $event): void
     {
         $this->logger()->warning('Two-factor authentication failed.', $this->context($event, [
+            'channel' => $event->channel,
             'reason' => $event->reason,
         ]));
     }
@@ -64,6 +66,7 @@ class LogTwoFactorEvents
     public function handleLockedOut(TwoFactorLockedOut $event): void
     {
         $this->logger()->warning('Two-factor authentication locked out.', $this->context($event, [
+            'channel' => $event->channel,
             'reason' => $event->reason,
             'available_in' => $event->availableIn,
         ]));
