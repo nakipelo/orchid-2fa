@@ -7,7 +7,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Version 0.2.0: channel drivers. The first external driver is
+## [0.2.0] - 2026-11-03
+
+Channel drivers. The first external driver is
 [nakipelo/orchid-2fa-totp](https://github.com/nakipelo/orchid-2fa-totp) (authenticator apps). For
 applications with e-mail codes only the upgrade is `composer require` and `php artisan migrate`; see
 "Upgrade notes" below and "Upgrade 0.1 → 0.2" in the README.
@@ -236,6 +238,7 @@ First release.
   `orchid-2fa-views`, `orchid-2fa-translations`.
 - Support for Laravel 11.35+, 12 and 13 with `orchid/platform` ^14.53, PHP 8.2+.
 
-[Unreleased]: https://github.com/nakipelo/orchid-2fa/compare/0.1.1...HEAD
+[Unreleased]: https://github.com/nakipelo/orchid-2fa/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/nakipelo/orchid-2fa/releases/tag/0.2.0
 [0.1.1]: https://github.com/nakipelo/orchid-2fa/releases/tag/0.1.1
 [0.1.0]: https://github.com/nakipelo/orchid-2fa/releases/tag/0.1.0
