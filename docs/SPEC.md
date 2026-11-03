@@ -48,19 +48,21 @@
 
 ### 4.1. Вход без 2FA
 1. `POST platform.login.auth`: работает контроллер пакета, валидация как у Orchid (`email`, `password` — `required|string`).
-2. Контроллер диспатчит `Illuminate\Auth\Events\Attempting`, затем `guard->validate(email, password)`. `validate()`, в отличие от `attempt()`, не шлёт `Attempting`/`Failed` и не рехеширует пароль, поэтому всё это делает контроллер пакета. При неверном пароле — `Failed` и та же `ValidationException` на `email` с тем же текстом, что у Orchid. При верном — сразу `provider->rehashPasswordIfRequired($user, $credentials)`: после шага кода пароля в запросе уже нет, а хранить его в pending нельзя.
+2. Контроллер диспатчит `Illuminate\Auth\Events\Attempting`, затем `guard->validate(email, password)`. `validate()`, в отличие от `attempt()`, не шлёт `Attempting`/`Failed` и не рехеширует пароль, поэтому всё это делает контроллер пакета. При неверном пароле — `Failed` и та же `ValidationException` на `email` с тем же текстом, что у Orchid. При верном — сразу `provider->rehashPasswordIfRequired($user, $credentials)`: после шага кода пароля в запросе уже нет, а хранить его в pending нельзя. Рехеш выполняется, только если `hashing.rehash_on_login` (по умолчанию `true`) — та же настройка, по которой `SessionGuard::attempt()` решает, рехешировать ли (свойство guard защищённое, поэтому читается конфиг). API `UserProvider::rehashPasswordIfRequired()` одинаков в Laravel 11.35–13; проверено тестами.
 3. 2FA не требуется → шаг «финальный вход» (§4.3).
 
 ### 4.2. Вход с 2FA
 1. Пункты 1–2 из §4.1.
 2. 2FA требуется, доверенного устройства нет (§4.4) → `session()->regenerate()`, в сессию кладётся pending (ключ `orchid-2fa.pending`).
-3. Если для пользователя уже есть активный код (не истёк, попытки остались, привязан к текущему адресу), новый не отправляется. Иначе выпускается и отправляется новый код (§4.9, §4.10), старый аннулируется.
+3. Если для пользователя уже есть активный код (не истёк, попытки остались, привязан к текущему адресу), новый не отправляется, а pending получает `challenge_id` этого кода. Иначе выпускается и отправляется новый код (§4.9, §4.10), старый аннулируется. `challenge_id` выдаётся на код (новый при каждой отправке), pending хранит `challenge_id` своего кода; «Отправить повторно» обновляет его в pending. Если код отправить нельзя (лимит §4.11 или ошибка §4.10), pending всё равно создаётся (с `challenge_id`, которому код не соответствует), а экран кода показывает ошибку; срок pending повторная отправка не продлевает.
 4. Редирект на `platform.two-factor.challenge`. Для `wantsJson()` — `200 {"two_factor": true, "redirect": "<url>"}`.
 5. Экран кода. При `POST platform.two-factor.verify`:
    - pending нет или истёк → редирект на `platform.login` с сообщением «сессия входа истекла»;
-   - код неверный → `TwoFactorFailed(reason: invalid_code)`, попытка засчитана; на 5-й неверной код аннулируется, `TwoFactorLockedOut`, сообщение «код больше недействителен, запросите новый»;
+   - кода для этого `challenge_id` нет (истёк, использован, заменён новым, адрес изменился) → `TwoFactorFailed(reason: expired)`, сообщение «код больше недействителен, запросите новый»;
+   - код неверный → `TwoFactorFailed(reason: invalid_code)`, попытка засчитана, сообщение с числом оставшихся попыток; на 5-й неверной — `TwoFactorFailed(invalid_code)` и `TwoFactorLockedOut(attempts_exceeded)`, код аннулируется, сообщение «код больше недействителен, запросите новый»;
    - код верный → код удаляется из cache, pending удаляется, при первом успехе выставляется `confirmed_at`, при отмеченной галочке выдаётся cookie доверия (§4.4), `TwoFactorPassed`, финальный вход (§4.3).
-6. «Войти под другим пользователем» (`POST platform.two-factor.cancel`) удаляет pending, забывает lock-cookie и редиректит на `platform.login`.
+6. «Войти под другим пользователем» (`POST platform.two-factor.cancel`) удаляет pending, забывает lock-cookie и редиректит на `platform.login`. Активный код при этом не удаляется.
+7. JSON (`wantsJson()`) на шаге кода: ошибки verify и resend, а также отсутствие/истечение pending — `422` с ошибкой на поле `code`; успешный verify — `204` (§4.3); успешный resend — `200 {"resend_available_in": N}`.
 
 ### 4.3. Финальный вход (общий для §4.1 и §4.2)
 `guard->login($user, $remember)` → `session()->regenerate()` → если `$remember`, ставится lock-cookie как у Orchid: `CookieJar::forever(guard->getName().'__orchid_lock', $user->id)` → `redirect()->intended(route(config('platform.index')))`, для JSON — `204`. Имя lock-cookie — именно `guard->getName().'__orchid_lock'`, где `SessionGuard::getName()` = `login_{guard}_{sha1(SessionGuard::class)}`, а не `{guard}__orchid_lock`: адаптер повторяет `LoginController::nameForLock()` Orchid буквально. Все имена берутся из адаптера.
@@ -119,6 +121,9 @@ src/
   Challenge/ChallengeManager.php          выпуск/проверка/лимиты, channel-agnostic
   Challenge/CodeStore.php                 cache: хеш, попытки, привязки
   Challenge/PendingLogin.php              value-object + чтение/запись сессии
+  Challenge/StoredCode.php, VerificationResult.php  запись кода в cache, итог проверки
+  Exceptions/{DeliveryFailedException,SendLimitExceededException}.php
+  Http/Controllers/Concerns/CompletesLogin.php     финальный вход (§4.3)
   Policy/TwoFactorPolicy.php              requires()/isEnforced()/isEnabled()
   TrustedDevice/TrustedDeviceCookie.php
   Http/Controllers/LoginController.php    POST platform.login.auth
@@ -137,7 +142,7 @@ src/
   Console/RotateRememberTokensCommand.php
 database/migrations/xxxx_create_two_factor_authentications_table.php
 resources/views/challenge.blade.php        @extends(<адаптер: 'platform::auth'>)
-resources/lang/{en,ru}/... 
+lang/{en,ru}/messages.php                  переводы, namespace orchid-2fa (публикуются в lang/vendor/orchid-2fa)
 ```
 
 ### 5.1. Адаптер `Support\Orchid`
@@ -181,6 +186,8 @@ interface TwoFactorChannel
 | POST | `two-factor/resend` | `platform.two-factor.resend` | public, guest, `routes.throttle` | `ChallengeController@resend` |
 | POST | `two-factor/cancel` | `platform.two-factor.cancel` | public, guest | `ChallengeController@cancel` |
 | screen | `profile/two-factor` | `platform.profile.two-factor` | private | `TwoFactorProfileScreen` |
+
+Throttle `verify`/`resend` регистрируется как `throttle:{max},{minutes},orchid-2fa`: собственный префикс отделяет счётчик от `throttle:60,1` у `POST login`, у которого та же сигнатура (домен + IP).
 
 Замещение `POST login`: маршрут регистрируется в `$this->app->booted()`, после маршрутов Orchid (Orchid грузит их в booted-колбэке своего `RouteServiceProvider`). В `RouteCollection` маршрут с тем же методом, доменом и URI, добавленный позже, замещает ранний, имя `platform.login.auth` указывает на него. `GET platform.login` не переопределяется. Работоспособность замещения проверяется тестом на этапе 1 (§10, §11): `route('platform.login.auth')` и реальный `POST` на этот URI попадают в контроллер пакета — и без кеша, и после `route:cache`.
 
@@ -233,10 +240,10 @@ interface TwoFactorChannel
 Кроме того, финальный вход порождает штатный `Illuminate\Auth\Events\Login`. `LogTwoFactorEvents` пишет все четыре события в `log.channel`, подписывается при `log.enabled`.
 
 ### 5.8. Уведомления
-`TwoFactorCodeNotification` (`mail`): код, срок, маскированного адреса нет, IP и user-agent не содержит. Класс задаётся в `notification.class` и должен принимать `(string $code, CarbonInterface $expiresAt)`. По умолчанию отправка синхронная. При `notification.queue = true` класс реализует `ShouldQueue` через `connection`/`queue` из конфига. `TwoFactorEmailChangedNotification` уходит через `Notification::route('mail', $old)` и тоже подменяется конфигом.
+`TwoFactorCodeNotification` (`mail`): код, срок, маскированного адреса нет, IP и user-agent не содержит. Класс задаётся в `notification.class` и должен принимать `(string $code, CarbonInterface $expiresAt)`. По умолчанию отправка синхронная (`Notification::sendNow`, даже если класс реализует `ShouldQueue`). При `notification.queue = true` `EmailChannel` сам ставит в очередь `SendQueuedNotifications` с `connection`/`queue_name` из конфига, поэтому класс не обязан реализовывать `ShouldQueue`. Письмо адресуется через `AnonymousNotifiable` на адрес из `channels.email.attribute`, трейт `Notifiable` у модели не нужен. Нет адреса → `DeliveryFailedException` (fail-closed, §4.10). `TwoFactorEmailChangedNotification` уходит через `Notification::route('mail', $old)` и тоже подменяется конфигом.
 
 ### 5.9. Код
-`random_int` на `code.length` цифр с ведущими нулями. В cache (`cache.store`) по ключу `orchid-2fa:code:{user_id}` лежит `{hash, challenge_id, destination_hash, expires_at}`, TTL `code.ttl`. `hash = hash_hmac('sha256', code.'|'.challenge_id, app.key)`, сравнение через `hash_equals`. Код действителен, только если `challenge_id` совпадает с pending и `destination_hash` — с текущим адресом. Попытки считаются в `RateLimiter` по ключу `orchid-2fa:verify:{user_id}:{challenge_id}`, отправки — `orchid-2fa:send:{user_id}` (час) и `orchid-2fa:cooldown:{user_id}`. Попытка засчитывается до сравнения, это закрывает параллельный перебор. Успешная проверка удаляет запись атомарно (`Cache::pull`).
+`random_int` на `code.length` цифр с ведущими нулями. В cache (`cache.store`) по ключу `orchid-2fa:code:{user_id}` лежит `{hash, challenge_id, destination_hash, expires_at}`, TTL `code.ttl`. `hash = hash_hmac('sha256', code.'|'.challenge_id, app.key)`, сравнение через `hash_equals`. Код действителен, только если `challenge_id` совпадает с pending и `destination_hash` — с текущим адресом. Попытки считаются в `RateLimiter` по ключу `orchid-2fa:verify:{user_id}:{challenge_id}`, отправки — `orchid-2fa:send:{user_id}` (час) и `orchid-2fa:cooldown:{user_id}`. Попытка засчитывается до сравнения, это закрывает параллельный перебор. Успешная проверка «забирает» код атомарно: `Cache::add('orchid-2fa:used:{user_id}:{challenge_id}')` (атомарен в штатных store Laravel, в отличие от `Cache::pull` = get + forget), затем запись удаляется; второй параллельный verify с тем же кодом получает отказ.
 
 ## 6. UI
 
@@ -287,6 +294,8 @@ interface TwoFactorChannel
 - `platform.2fa.required` — 2FA обязательна для владельца права;
 - `platform.systems.users.2fa-reset` — сброс 2FA другим пользователям (кнопка в `UserEditScreen`; artisan-команда права не проверяет).
 
+Регистрация — в `booted`, вместе с маршрутами. На этапе 2 регистрируется только `platform.2fa.required` (без неё `getAllowAllPermission()` его не содержит и администратор не становится принудительным); `platform.systems.users.2fa-reset` — на этапе 4 вместе с кнопкой сброса.
+
 `orchid:admin` выдаёт пользователю `Dashboard::getAllowAllPermission()`, то есть и `platform.2fa.required`. Так и задумано: администраторы обязаны проходить 2FA, из «всех прав» право не исключается. В README: при первом входе администратору нужна рабочая почта, иначе вход восстанавливается только через `orchid-2fa:reset` после исправления адреса.
 
 ## 9. Безопасность
@@ -299,7 +308,7 @@ interface TwoFactorChannel
 | Фиксация сессии | `regenerate()` при создании pending и при финальном входе |
 | Перебор кода | 5 попыток на код, 5 кодов в час → не больше 25 попыток в час против 10⁶ вариантов; throttle по IP; инкремент до сравнения |
 | Повтор старого кода | `Cache::pull` при успехе; новый код аннулирует старый; привязка к `challenge_id` |
-| Код из другой сессии или старого вызова | `challenge_id` в pending и в hash |
+| Код из другой сессии или старого вызова | `challenge_id` в pending и в hash. Уточнение: из-за переиспользования активного кода (§4.2 п. 3) другая сессия того же пользователя, прошедшая пароль, пока код активен, получает тот же `challenge_id`, и код действует в ней тоже; сессия со старым `challenge_id` код не примет |
 | Утечка кодов из cache | Хранится HMAC на `app.key`, не сам код |
 | Смена адреса для перехвата кода | Уведомление на старый адрес, `confirmed_at = null`, код привязан к `destination_hash`. **Принятый остаточный риск:** `UserProfileScreen` Orchid меняет e-mail без пароля, и злоумышленник с украденной сессией перенаправит коды на свой адрес; владельцу придёт только уведомление на старый адрес. Пакет стаб не меняет, README рекомендует подтверждение паролем в стабе |
 | Подделка или перенос cookie доверия | Шифрование с MAC, `uid` и `version` сверяются с БД, срок внутри payload, пароль проверяется всё равно |
@@ -354,6 +363,7 @@ interface TwoFactorChannel
 *Готово, когда:* CI зелёный по матрице; `composer serve` открывает админку Orchid; миграция применяется и откатывается; провайдер с не-`SessionGuard` падает с понятной ошибкой; grep по `src/` находит `platform.`, `platform::` и `Orchid\` только в `Support/Orchid.php` (проверка в CI скриптом); тесты маршрутов §10 проходят на всех версиях матрицы, включая `route:cache`, — либо, если не проходят, выбран и реализован запасной путь §5.3 и §5.3 обновлён.
 
 **2. Вход с кодом.** `LoginController`, pending, `ChallengeManager`, `CodeStore`, `EmailChannel`, notification, экран кода, лимиты, события, логгер, fail-closed.
+*Итог этапа 2:* реализовано (до ревью); тесты — `tests/Feature/Login/*`, `tests/Feature/Unit/ComponentsTest.php`; галочки доверия на экране кода нет до этапа 3. Уточнения зафиксированы в §4.1, §4.2, §5, §5.3, §5.8, §5.9, §8, §9.
 *Готово, когда:* все сценарии §4.1–4.3, 4.5 (кроме ротации при добровольном включении — этап 4), 4.6, 4.10, 4.11 и тесты обхода из §10 проходят; `Attempting`/`Failed` и rehash проверены на L11–13; ручная проверка в workbench (письмо в лог-мейлер) пройдена; без 2FA вход ничем не отличается от Orchid.
 
 **3. Доверенное устройство.** `TrustedDeviceCookie`, галочка, инкременты версии.

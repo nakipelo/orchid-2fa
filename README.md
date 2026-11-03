@@ -1,6 +1,6 @@
 # nakipelo/orchid-2fa
 
-> Draft (stage 1 of `docs/SPEC.md`). Installation and usage docs come with the 0.1.0 release.
+> Draft (stages 1–2 of `docs/SPEC.md`). Installation and usage docs come with the 0.1.0 release.
 
 Second factor (one-time e-mail code) for the [Orchid](https://orchid.software) admin panel password login.
 

@@ -42,6 +42,8 @@ abstract class TestCase extends Orchestra
             $config->set('app.key', 'base64:'.base64_encode(str_repeat('k', 32)));
             $config->set('database.default', 'testing');
             $config->set('database.connections.testing.foreign_key_constraints', true);
+            // Cheap hashing; the rehash tests hash with 4 rounds to make a rehash necessary.
+            $config->set('hashing.bcrypt.rounds', 5);
             $config->set('cache.default', 'array');
             $config->set('session.driver', 'array');
             $config->set('mail.default', 'array');
@@ -51,6 +53,17 @@ abstract class TestCase extends Orchestra
             ]);
             $config->set('logging.default', self::LOG_CHANNEL);
         });
+    }
+
+    /**
+     * Next requests come from a new browser: no cookies, no session, no user in memory.
+     */
+    public function newBrowser(): void
+    {
+        $this->defaultCookies = [];
+        $this->unencryptedCookies = [];
+        $this->flushSession();
+        $this->app['auth']->forgetGuards();
     }
 
     protected function logHandler(): TestHandler

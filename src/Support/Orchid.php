@@ -8,17 +8,16 @@ use Closure;
 use Illuminate\Auth\EloquentUserProvider;
 use Illuminate\Auth\Middleware\RedirectIfAuthenticated;
 use Illuminate\Auth\SessionGuard;
-use Illuminate\Cookie\CookieJar;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Nakipelo\Orchid2FA\Exceptions\UnsupportedGuardException;
+use Orchid\Access\UserAccess;
 use Orchid\Platform\Dashboard;
-use Orchid\Platform\Http\Controllers\LoginController as OrchidLoginController;
 use Orchid\Platform\ItemPermission;
+use Orchid\Platform\Models\User as OrchidUser;
 use Orchid\Screen\Actions\Menu;
-use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Adapter to Orchid (orchid/platform 14.x).
@@ -34,6 +33,11 @@ final class Orchid
     private const CONFIG_ROOT = 'platform';
 
     private const ROUTE_NAME_PREFIX = 'platform.';
+
+    /**
+     * Permission that makes two-factor authentication mandatory for its holder (spec §8).
+     */
+    private const PERMISSION_REQUIRED = 'platform.2fa.required';
 
     /**
      * Full config key of an Orchid setting, e.g. `configKey('auth')` → `platform.auth`.
@@ -216,15 +220,63 @@ final class Orchid
         return (bool) config(self::configKey('auth'), true);
     }
 
-    /**
-     * Stage 1 only: hand the login request over to Orchid's own controller.
-     * Replaced by the package login flow in stage 2.
-     */
-    public static function delegateLogin(Request $request): Response
+    public static function loginUrl(): string
     {
-        /** @var Response $response */
-        $response = app(OrchidLoginController::class)->login($request, app(CookieJar::class));
+        return route(self::loginRoute());
+    }
 
-        return $response;
+    /**
+     * The message Orchid shows for wrong credentials (Orchid's `LoginController::login()`).
+     * Translated with Orchid's JSON translations, so the response is identical to Orchid's.
+     */
+    public static function failedLoginMessage(): string
+    {
+        return (string) __('The details you entered did not match our records. Please double-check and try again.');
+    }
+
+    /**
+     * Names of the package routes inside the Orchid route group (spec §5.3).
+     */
+    public static function challengeRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.challenge';
+    }
+
+    public static function verifyRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.verify';
+    }
+
+    public static function resendRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.resend';
+    }
+
+    public static function cancelRoute(): string
+    {
+        return self::ROUTE_NAME_PREFIX.'two-factor.cancel';
+    }
+
+    public static function requiredPermission(): string
+    {
+        return self::PERMISSION_REQUIRED;
+    }
+
+    /**
+     * Whether the user holds an Orchid permission (directly or through a role).
+     * Users without Orchid's access trait hold no permissions.
+     */
+    public static function userHasPermission(Authenticatable $user, string $permission): bool
+    {
+        if ($user instanceof OrchidUser) {
+            return $user->hasAccess($permission);
+        }
+
+        // A model with Orchid's access trait that does not extend Orchid's user model.
+        if (in_array(UserAccess::class, class_uses_recursive($user), true)) {
+            return (bool) call_user_func([$user, 'hasAccess'], $permission);
+        }
+
+        return false;
     }
 }

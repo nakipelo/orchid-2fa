@@ -84,7 +84,7 @@ it('calls the package controller, not Orchid, on POST login', function () {
         ->assertSeeText('package controller');
 });
 
-it('keeps Orchid behaviour for wrong credentials in the stage 1 stub', function () {
+it('keeps Orchid behaviour for wrong credentials', function () {
     createAdmin();
 
     $this->from(route('platform.login'))

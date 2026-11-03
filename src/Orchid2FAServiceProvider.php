@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace Nakipelo\Orchid2FA;
 
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Nakipelo\Orchid2FA\Concerns\HasTwoFactor;
 use Nakipelo\Orchid2FA\Exceptions\UnsupportedGuardException;
+use Nakipelo\Orchid2FA\Http\Controllers\ChallengeController;
 use Nakipelo\Orchid2FA\Http\Controllers\LoginController;
+use Nakipelo\Orchid2FA\Listeners\LogTwoFactorEvents;
 use Nakipelo\Orchid2FA\Support\Orchid;
 
 class Orchid2FAServiceProvider extends ServiceProvider
@@ -23,6 +26,12 @@ class Orchid2FAServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        $this->loadViewsFrom(__DIR__.'/../resources/views', 'orchid-2fa');
+        $this->loadTranslationsFrom(__DIR__.'/../lang', 'orchid-2fa');
+
+        if (config('orchid-2fa.log.enabled')) {
+            $this->app->make(Dispatcher::class)->subscribe(LogTwoFactorEvents::class);
+        }
 
         if ($this->app->runningInConsole()) {
             $this->publishes([
@@ -32,6 +41,14 @@ class Orchid2FAServiceProvider extends ServiceProvider
             $this->publishesMigrations([
                 __DIR__.'/../database/migrations' => database_path('migrations'),
             ], 'orchid-2fa-migrations');
+
+            $this->publishes([
+                __DIR__.'/../resources/views' => resource_path('views/vendor/orchid-2fa'),
+            ], 'orchid-2fa-views');
+
+            $this->publishes([
+                __DIR__.'/../lang' => $this->app->langPath('vendor/orchid-2fa'),
+            ], 'orchid-2fa-translations');
         }
 
         // Orchid loads its routes in a "booted" callback of its RouteServiceProvider,
@@ -39,7 +56,9 @@ class Orchid2FAServiceProvider extends ServiceProvider
         // all providers have booted, so routes registered here come after Orchid's.
         $this->app->booted(function (): void {
             $this->ensureSessionGuard();
+            $this->registerPermissions();
             $this->registerLoginRoute();
+            $this->registerChallengeRoutes();
             $this->warnAboutMissingTrait();
         });
     }
@@ -74,6 +93,58 @@ class Orchid2FAServiceProvider extends ServiceProvider
                 ->middleware(['throttle:60,1', Orchid::guestMiddleware()])
                 ->name($this->localRouteName(Orchid::loginAuthRoute()));
         });
+    }
+
+    /**
+     * The code step routes (spec §5.3). Registered also when Orchid's own login routes are disabled.
+     */
+    protected function registerChallengeRoutes(): void
+    {
+        if ($this->app->routesAreCached()) {
+            return;
+        }
+
+        Orchid::routeGroup(false, function (): void {
+            $guest = Orchid::guestMiddleware();
+            $throttle = $this->challengeThrottle();
+
+            Route::get('two-factor', [ChallengeController::class, 'show'])
+                ->middleware($guest)
+                ->name($this->localRouteName(Orchid::challengeRoute()));
+
+            Route::post('two-factor', [ChallengeController::class, 'verify'])
+                ->middleware([$guest, $throttle])
+                ->name($this->localRouteName(Orchid::verifyRoute()));
+
+            Route::post('two-factor/resend', [ChallengeController::class, 'resend'])
+                ->middleware([$guest, $throttle])
+                ->name($this->localRouteName(Orchid::resendRoute()));
+
+            Route::post('two-factor/cancel', [ChallengeController::class, 'cancel'])
+                ->middleware($guest)
+                ->name($this->localRouteName(Orchid::cancelRoute()));
+        });
+    }
+
+    /**
+     * Per-IP `throttle` from `routes.throttle` ("max,minutes"). The own prefix keeps its
+     * counter apart from the `throttle:60,1` of `POST login`, which has the same IP signature.
+     */
+    protected function challengeThrottle(): string
+    {
+        $parts = array_map('trim', explode(',', (string) config('orchid-2fa.routes.throttle', '10,1')));
+
+        $max = $parts[0] !== '' ? $parts[0] : '10';
+        $minutes = ($parts[1] ?? '') !== '' ? $parts[1] : '1';
+
+        return 'throttle:'.$max.','.$minutes.',orchid-2fa';
+    }
+
+    protected function registerPermissions(): void
+    {
+        Orchid::registerPermissions((string) __('orchid-2fa::messages.permissions.group'), [
+            Orchid::requiredPermission() => (string) __('orchid-2fa::messages.permissions.required'),
+        ]);
     }
 
     /**
