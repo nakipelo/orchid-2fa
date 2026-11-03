@@ -123,6 +123,14 @@ final class Orchid
             ->group($routes);
     }
 
+    /**
+     * URL path of the Orchid route prefix (`platform.prefix`), e.g. `/admin`; `/` without a prefix.
+     */
+    public static function pathPrefix(): string
+    {
+        return '/'.trim(Dashboard::prefix('/'), '/');
+    }
+
     public static function loginRoute(): string
     {
         return self::ROUTE_NAME_PREFIX.'login';

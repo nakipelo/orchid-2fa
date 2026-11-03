@@ -16,6 +16,7 @@ use Illuminate\Validation\ValidationException;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Challenge\PendingLogin;
 use Nakipelo\Orchid2FA\Events\TwoFactorChallengeSent;
+use Nakipelo\Orchid2FA\Events\TwoFactorPassed;
 use Nakipelo\Orchid2FA\Exceptions\DeliveryFailedException;
 use Nakipelo\Orchid2FA\Exceptions\SendLimitExceededException;
 use Nakipelo\Orchid2FA\Http\Controllers\Concerns\CompletesLogin;
@@ -23,6 +24,7 @@ use Nakipelo\Orchid2FA\Http\Controllers\Concerns\InteractsWithChallenge;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Policy\TwoFactorPolicy;
 use Nakipelo\Orchid2FA\Support\Orchid;
+use Nakipelo\Orchid2FA\TrustedDevice\TrustedDeviceCookie;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -42,6 +44,7 @@ class LoginController
         protected ChallengeManager $challenges,
         protected Dispatcher $events,
         protected Repository $config,
+        protected TrustedDeviceCookie $trustedDevices,
     ) {
         Orchid::redirectAuthenticatedToIndex();
     }
@@ -65,6 +68,13 @@ class LoginController
         PendingLogin::forget($request->session());
 
         if (! $this->policy->requires($user)) {
+            return $this->completeLogin($request, $user, $remember);
+        }
+
+        // A trusted device replaces the code, never the password (spec §4.4).
+        if ($this->trustedDevices->passes($request, $user, $this->policy->record($user))) {
+            $this->events->dispatch(new TwoFactorPassed($user, Orchid::guardName(), TwoFactorPassed::VIA_TRUSTED_DEVICE));
+
             return $this->completeLogin($request, $user, $remember);
         }
 

@@ -14,6 +14,7 @@ return [
         'resend_in' => 'Send again in :time',
         'resent' => 'A new code has been sent.',
         'another_user' => 'Sign in as a different user',
+        'trust_device' => 'Trust this device for :days day|Trust this device for :days days',
     ],
 
     'errors' => [

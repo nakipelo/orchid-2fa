@@ -69,4 +69,14 @@ class TwoFactorAuthentication extends Model
     {
         return $this->enabled_at !== null;
     }
+
+    /**
+     * Invalidate all trusted device cookies of the user (spec §4.4): "sign out of all
+     * trusted devices", password change, disabling and resetting 2FA. Works without the
+     * HasTwoFactor trait. Without a record no trusted device cookie can exist, so nothing is created.
+     */
+    public static function bumpTrustedDevicesVersionFor(int|string $userId): void
+    {
+        static::query()->where('user_id', $userId)->increment('trusted_devices_version');
+    }
 }

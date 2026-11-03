@@ -8,10 +8,12 @@ use Illuminate\Contracts\Config\Repository;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Mix;
 use Illuminate\Support\HtmlString;
+use Illuminate\Testing\TestResponse;
 use Monolog\Handler\TestHandler;
 use Monolog\Logger;
 use Orchestra\Testbench\Concerns\WithWorkbench;
 use Orchestra\Testbench\TestCase as Orchestra;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Real orchid/platform on the workbench application (testbench.yaml):
@@ -53,6 +55,26 @@ abstract class TestCase extends Orchestra
             ]);
             $config->set('logging.default', self::LOG_CHANNEL);
         });
+    }
+
+    /**
+     * Each request starts with an empty cookie queue, as in a fresh PHP process: the
+     * application (and its CookieJar singleton) is shared by all requests of a test.
+     *
+     * @param  string  $method
+     * @param  string  $uri
+     * @param  array<string, mixed>  $parameters
+     * @param  array<string, mixed>  $cookies
+     * @param  array<string, mixed>  $files
+     * @param  array<string, mixed>  $server
+     * @param  string|null  $content
+     * @return TestResponse<Response>
+     */
+    public function call($method, $uri, $parameters = [], $cookies = [], $files = [], $server = [], $content = null)
+    {
+        $this->app['cookie']->flushQueuedCookies();
+
+        return parent::call($method, $uri, $parameters, $cookies, $files, $server, $content);
     }
 
     /**

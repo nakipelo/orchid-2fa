@@ -158,6 +158,7 @@ lang/{en,ru}/messages.php                  переводы, namespace orchid-2f
 | `profileRoute()` | `config('platform.profile', 'platform.profile')` |
 | `authLayout()`, `viewNamespace()` | `platform::auth`, `platform` |
 | `lockCookieName()` | `guard()->getName().'__orchid_lock'` (повтор `LoginController::nameForLock()`) |
+| `pathPrefix()` | путь префикса Orchid (`/admin`; без префикса — `/`), `path` cookie доверия (§5.6) |
 | `guestMiddleware()` | `RedirectIfAuthenticated` с `redirectUsing(fn () => indexUrl())`, как в Orchid |
 | `registerPermissions(...)`, `registerMenu(...)` | `Dashboard::registerPermissions(ItemPermission)`, `Dashboard::registerMenuElement(Menu)` |
 | `loginRoutesEnabled()` | `config('platform.auth', true)` |
@@ -222,13 +223,16 @@ Throttle `verify`/`resend` регистрируется как `throttle:{max},{
 - `bumpTrustedDevicesVersion()`;
 - слушатели модели: `updating` с `isDirty('password')` → инкремент версии; `updated` с `wasChanged('email')` → §4.9.
 
+Инкремент версии без трейта — `TwoFactorAuthentication::bumpTrustedDevicesVersionFor($userId)` (им же пользуется `bumpTrustedDevicesVersion()`): для кнопки «Выйти со всех доверенных устройств», сброса и выключения (этап 4). Нет записи — нет и cookie доверия, запись не создаётся.
+
 Без трейта провайдер работает, но доверенные устройства не сбрасываются при смене пароля. При загрузке в `local`/`testing` провайдер пишет предупреждение.
 
 ### 5.6. Cookie доверенного устройства
-- Имя: `trusted_devices.cookie` + `_` + `hash_hmac('sha256', user_id, app.key)`, обрезанный до 16 символов. Отдельная cookie на пользователя: несколько учёток в одном браузере не мешают друг другу, `user_id` в имени не раскрывается.
-- Значение: `Crypt::encryptString(json{uid, v, exp})`. Это шифрование с MAC, независимое от `EncryptCookies`.
-- Атрибуты: `HttpOnly`, `Secure` по `config('session.secure')`, `SameSite=Lax`, `path` = префикс Orchid, срок `trusted_devices.lifetime_days`.
-- Проверка: расшифровка успешна, `uid` равен пользователю, прошедшему пароль, `v === trusted_devices_version`, `exp > now`. Невалидная cookie удаляется.
+- Имя: `trusted_devices.cookie` + `_` + `hash_hmac('sha256', guard.'|'.user_id, app.key)`, обрезанный до 16 символов. Отдельная cookie на пользователя и guard: несколько учёток в одном браузере не мешают друг другу, `user_id` в имени не раскрывается.
+- Значение: `Crypt::encryptString(json{uid, g, v, exp})`, `g` — имя guard Orchid. Это шифрование с MAC, независимое от `EncryptCookies` (в группе `web` она шифрует значение ещё раз). Cookie другого приложения (другой `app.key`) не расшифровывается.
+- Атрибуты: `HttpOnly`, `SameSite=Lax`, `path` = префикс Orchid (`Orchid::pathPrefix()`), `domain` = `session.domain`, срок `trusted_devices.lifetime_days` (не меньше 1). `Secure` = `session.secure`; если он не задан (`null`, по умолчанию), — по схеме запроса (HTTPS → `Secure`).
+- Проверка: расшифровка успешна, `uid` равен пользователю, прошедшему пароль, `g` — текущий guard Orchid, `v === trusted_devices_version` (целое), `exp > now`; запись 2FA существует и `confirmed_at` не null (после смены e-mail, §4.9, вход шлёт код на новый адрес и cookie не действует до подтверждения). Невалидная cookie удаляется.
+- При `trusted_devices.enabled = false` галочки нет, cookie не выдаются и не принимаются, но и не удаляются: после повторного включения действующие cookie снова работают.
 
 ### 5.7. События (`Nakipelo\Orchid2FA\Events`)
 Все несут `user` и `guard`, дополнительно:
@@ -311,7 +315,7 @@ Throttle `verify`/`resend` регистрируется как `throttle:{max},{
 | Код из другой сессии или старого вызова | `challenge_id` в pending и в hash. Уточнение: из-за переиспользования активного кода (§4.2 п. 3) другая сессия того же пользователя, прошедшая пароль, пока код активен, получает тот же `challenge_id`, и код действует в ней тоже; сессия со старым `challenge_id` код не примет |
 | Утечка кодов из cache | Хранится HMAC на `app.key`, не сам код |
 | Смена адреса для перехвата кода | Уведомление на старый адрес, `confirmed_at = null`, код привязан к `destination_hash`. **Принятый остаточный риск:** `UserProfileScreen` Orchid меняет e-mail без пароля, и злоумышленник с украденной сессией перенаправит коды на свой адрес; владельцу придёт только уведомление на старый адрес. Пакет стаб не меняет, README рекомендует подтверждение паролем в стабе |
-| Подделка или перенос cookie доверия | Шифрование с MAC, `uid` и `version` сверяются с БД, срок внутри payload, пароль проверяется всё равно |
+| Подделка или перенос cookie доверия | Шифрование с MAC, `uid`, guard и `version` сверяются, срок внутри payload, пароль проверяется всё равно |
 | Утеря доверенного устройства | «Выйти со всех доверенных устройств», смена пароля |
 | Обход при сбое почты | Fail-closed, кнопки «пропустить» нет |
 | Перечисление пользователей | Ответ на неверный пароль идентичен Orchid. Лимиты отправки срабатывают только после верного пароля |
@@ -368,6 +372,7 @@ Throttle `verify`/`resend` регистрируется как `throttle:{max},{
 
 **3. Доверенное устройство.** `TrustedDeviceCookie`, галочка, инкременты версии.
 *Готово, когда:* проходят тесты §4.4, включая смену пароля через `UserProfileScreen` и `UserEditScreen` в workbench; при `trusted_devices.enabled = false` галочки нет, а существующие cookie игнорируются.
+*Итог этапа 3:* реализовано (до ревью); тесты — `tests/Feature/Login/TrustedDeviceTest.php`, `tests/Feature/Unit/TrustedDeviceCookieTest.php`. Слушатель смены пароля в `HasTwoFactor` — на этом этапе; кнопка «Выйти со всех доверенных устройств», выключение и сброс (их инкременты) — этап 4, API инкремента готов (§5.5). Уточнения зафиксированы в §5.1, §5.5, §5.6, §9.
 
 **4. Профиль и администрирование.** `TwoFactorProfileScreen`, `TwoFactorProfileLinkLayout`, опция `menu.enabled`, выключение с кодом, ротация `remember_token`, `TwoFactorResetLayout` и `ResetsTwoFactor`, право сброса, `orchid-2fa:reset`, `orchid-2fa:rotate-remember-tokens`, смена e-mail.
 *Готово, когда:* проходят сценарии §4.5, §4.7–4.9; `TwoFactorProfileLinkLayout` подключён в workbench-стаб `UserProfileScreen` одной строкой, Layout сброса — в стаб `UserEditScreen` двумя строками и работает только с правом; пункта меню нет по умолчанию и он есть при `menu.enabled`; принудительный пользователь не видит кнопку выключения и не может выключить 2FA прямым запросом; `orchid-2fa:reset` сбрасывает 2FA и возвращает ненулевой код для неизвестного e-mail; после `orchid-2fa:rotate-remember-tokens` старые remember-cookie не пускают.

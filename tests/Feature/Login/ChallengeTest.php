@@ -75,7 +75,8 @@ it('renders the code screen on the Orchid auth layout', function () {
         ->assertSee('Sign in as a different user')
         ->assertSee('name="_token"', false)
         ->assertDontSee('enforced@example.com')
-        ->assertDontSee('trust_device', false)
+        ->assertSee('name="trust_device"', false)
+        ->assertSee('Trust this device for 30 days')
         // Orchid's auth layout
         ->assertSee('form-signin', false);
 });

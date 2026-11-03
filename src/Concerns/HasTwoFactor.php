@@ -11,13 +11,28 @@ use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 /**
  * Add to the user model of the Orchid guard (`App\Models\User`).
  *
- * Model listeners (password → trusted devices version, e-mail change → §4.9)
- * are added in later stages.
+ * A password change invalidates the trusted devices of the user (spec §4.4, §5.5).
+ * The e-mail change listener (§4.9) is added in a later stage.
  *
  * @mixin Model
  */
 trait HasTwoFactor
 {
+    /**
+     * Any `save()` that changes the password (profile, UserEditScreen, password reset)
+     * invalidates the trusted device cookies. Mass updates through the query builder
+     * fire no model events.
+     */
+    public static function bootHasTwoFactor(): void
+    {
+        static::updating(static function (Model $user): void {
+            if ($user->isDirty('password')) {
+                TwoFactorAuthentication::bumpTrustedDevicesVersionFor($user->getKey());
+                $user->unsetRelation('twoFactor');
+            }
+        });
+    }
+
     /**
      * @return HasOne<TwoFactorAuthentication, $this>
      */
@@ -43,13 +58,13 @@ trait HasTwoFactor
     }
 
     /**
-     * Invalidate all trusted device cookies of the user.
+     * Invalidate all trusted device cookies of the user ("sign out of all trusted devices").
      *
      * Without a record no trusted device cookie can exist, so nothing is created.
      */
     public function bumpTrustedDevicesVersion(): void
     {
-        $this->twoFactor()->increment('trusted_devices_version');
+        TwoFactorAuthentication::bumpTrustedDevicesVersionFor($this->getKey());
 
         $this->unsetRelation('twoFactor');
     }

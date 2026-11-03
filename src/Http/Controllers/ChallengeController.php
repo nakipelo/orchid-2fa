@@ -24,6 +24,7 @@ use Nakipelo\Orchid2FA\Http\Controllers\Concerns\CompletesLogin;
 use Nakipelo\Orchid2FA\Http\Controllers\Concerns\InteractsWithChallenge;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Support\Orchid;
+use Nakipelo\Orchid2FA\TrustedDevice\TrustedDeviceCookie;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -41,6 +42,7 @@ class ChallengeController
         protected ChallengeManager $challenges,
         protected Dispatcher $events,
         protected Repository $config,
+        protected TrustedDeviceCookie $trustedDevices,
     ) {
         Orchid::redirectAuthenticatedToIndex();
     }
@@ -70,6 +72,8 @@ class ChallengeController
             'verifyUrl' => route(Orchid::verifyRoute()),
             'resendUrl' => route(Orchid::resendRoute()),
             'cancelUrl' => route(Orchid::cancelRoute()),
+            'trustDevice' => $this->trustedDevices->isEnabled(),
+            'trustDeviceDays' => $this->trustedDevices->lifetimeDays(),
             'error' => $request->session()->get(self::FLASH_ERROR),
             'status' => $request->session()->get(self::FLASH_STATUS),
         ]);
@@ -104,9 +108,15 @@ class ChallengeController
 
         PendingLogin::forget($request->session());
 
-        $this->confirmDestination($user);
+        $record = $this->confirmDestination($user);
 
-        $this->events->dispatch(new TwoFactorPassed($user, Orchid::guardName(), TwoFactorPassed::VIA_CODE));
+        $trust = $this->trustedDevices->isEnabled() && $request->boolean('trust_device');
+
+        if ($trust) {
+            $this->trustedDevices->issue($user, $record);
+        }
+
+        $this->events->dispatch(new TwoFactorPassed($user, Orchid::guardName(), TwoFactorPassed::VIA_CODE, $trust));
 
         return $this->completeLogin($request, $user, $pending->remember);
     }
@@ -210,7 +220,7 @@ class ChallengeController
     /**
      * A successful code confirms the current address (spec §4.2, §4.9).
      */
-    protected function confirmDestination(Authenticatable $user): void
+    protected function confirmDestination(Authenticatable $user): TwoFactorAuthentication
     {
         $record = TwoFactorAuthentication::query()->firstOrNew(['user_id' => $user->getAuthIdentifier()]);
 
@@ -218,6 +228,8 @@ class ChallengeController
             $record->confirmed_at = now();
             $record->save();
         }
+
+        return $record;
     }
 
     protected function pendingTtl(): int
