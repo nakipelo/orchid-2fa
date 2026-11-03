@@ -7,7 +7,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-First release, planned as 0.1.0.
+## [0.1.0] - 2026-11-03
+
+First release.
 
 ### Added
 
@@ -36,4 +38,5 @@ First release, planned as 0.1.0.
   `orchid-2fa-views`, `orchid-2fa-translations`.
 - Support for Laravel 11.35+, 12 and 13 with `orchid/platform` ^14.53, PHP 8.2+.
 
-[Unreleased]: https://github.com/nakipelo/orchid-2fa/commits/main
+[Unreleased]: https://github.com/nakipelo/orchid-2fa/compare/0.1.0...HEAD
+[0.1.0]: https://github.com/nakipelo/orchid-2fa/releases/tag/0.1.0
