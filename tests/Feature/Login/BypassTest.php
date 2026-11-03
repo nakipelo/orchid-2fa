@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Illuminate\Cache\RateLimiter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Challenge\CodeStore;
@@ -30,9 +31,11 @@ it('keeps the admin panel closed while the login is pending', function () {
 });
 
 it('does not accept a used code again', function () {
+    tfFixCodes('111111', '222222');
     tfEnforcedUser();
     tfLogin();
     $code = tfLastCode();
+    expect($code)->toBe('111111');
     tfVerify($code)->assertRedirect(route('platform.main'));
 
     $this->post('/admin/logout');
@@ -41,15 +44,14 @@ it('does not accept a used code again', function () {
 
     tfLogin()->assertRedirect(route('platform.two-factor.challenge'));
     // A used code is not "active": the new login sends a new one.
-    expect(tfSentCodes())->toHaveCount(2);
+    expect(tfSentCodes())->toBe(['111111', '222222']);
 
-    if (tfLastCode() !== $code) {
-        tfVerify($code)->assertSessionHasErrors('code');
-        $this->assertGuest();
-    }
+    tfVerify($code)->assertSessionHasErrors('code');
+    $this->assertGuest();
 });
 
 it('does not accept a code of a previous challenge', function () {
+    tfFixCodes('111111', '222222');
     config(['orchid-2fa.resend.cooldown' => 0]);
     tfEnforcedUser();
     tfLogin();
@@ -57,11 +59,10 @@ it('does not accept a code of a previous challenge', function () {
 
     $this->post(route('platform.two-factor.resend'));
     $new = tfLastCode();
+    expect([$old, $new])->toBe(['111111', '222222']);
 
-    if ($old !== $new) {
-        tfVerify($old)->assertSessionHasErrors('code');
-        $this->assertGuest();
-    }
+    tfVerify($old)->assertSessionHasErrors('code');
+    $this->assertGuest();
 
     tfVerify($new)->assertRedirect(route('platform.main'));
 });
@@ -93,6 +94,7 @@ it('ignores user_id in the request', function () {
 });
 
 it('does not let a code of one user in as another', function () {
+    tfFixCodes('111111', '222222');
     tfEnforcedUser('victim@example.com');
     tfEnforcedUser('attacker@example.com');
 
@@ -102,11 +104,10 @@ it('does not let a code of one user in as another', function () {
 
     tfLogin('attacker@example.com');
     $attackerCode = tfLastCode('attacker@example.com');
+    expect([$victimCode, $attackerCode])->toBe(['111111', '222222']);
 
-    if ($victimCode !== $attackerCode) {
-        tfVerify($victimCode)->assertSessionHasErrors('code');
-        $this->assertGuest();
-    }
+    tfVerify($victimCode)->assertSessionHasErrors('code');
+    $this->assertGuest();
 });
 
 it('rejects verify without a pending login', function () {
@@ -140,7 +141,7 @@ it('consumes a code only once under parallel verification', function () {
         ->and($manager->verify($user, $challenge, $code))->toBe(VerificationResult::Expired);
 });
 
-it('lets only one of two verifications with the right code pass', function () {
+it('refuses a second, sequential verification with the same code', function () {
     config(['orchid-2fa.resend.cooldown' => 0]);
     $user = tfEnforcedUser();
     $manager = app(ChallengeManager::class);
@@ -165,4 +166,75 @@ it('counts the attempt before comparing', function () {
 
     expect($manager->verify($user, $challenge, $code))->toBe(VerificationResult::Expired)
         ->and(app(CodeStore::class)->get($user->id))->toBeNull();
+});
+
+it('ends the pending login when the password changes before the code', function () {
+    $user = tfEnforcedUser();
+    tfLogin();
+    $code = tfLastCode();
+
+    // For example, an administrator changes a compromised password while the code step is pending.
+    $user->forceFill(['password' => Hash::make('completely-new')])->save();
+
+    tfVerify($code)
+        ->assertRedirect(route('platform.login'))
+        ->assertSessionHasErrors(['email' => 'Your password has been changed. Please sign in again.']);
+    $this->assertGuest();
+    expect(PendingLogin::fromSession(session()->driver()))->toBeNull();
+
+    // The pending login is gone: the code does not work afterwards either.
+    tfVerify($code)->assertRedirect(route('platform.login'));
+    $this->assertGuest();
+});
+
+it('does not resend the code or show the code screen after the password changed', function () {
+    $user = tfEnforcedUser();
+    tfLogin();
+    $user->forceFill(['password' => Hash::make('completely-new')])->save();
+
+    $this->get(route('platform.two-factor.challenge'))
+        ->assertRedirect(route('platform.login'))
+        ->assertSessionHasErrors(['email' => 'Your password has been changed. Please sign in again.']);
+
+    tfLogin(password: 'completely-new')->assertRedirect(route('platform.two-factor.challenge'));
+    $user->forceFill(['password' => Hash::make('another-one')])->save();
+    $this->travel(61)->seconds();
+
+    $this->post(route('platform.two-factor.resend'))
+        ->assertRedirect(route('platform.login'))
+        ->assertSessionHasErrors(['email' => 'Your password has been changed. Please sign in again.']);
+    expect(tfSentCodes())->toHaveCount(1);
+});
+
+it('answers JSON clients when the password changed before the code', function () {
+    $user = tfEnforcedUser();
+    tfLogin();
+    $code = tfLastCode();
+    $user->forceFill(['password' => Hash::make('completely-new')])->save();
+
+    $this->postJson('/admin/two-factor', ['code' => $code])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['code' => 'Your password has been changed. Please sign in again.']);
+    $this->assertGuest();
+});
+
+it('keeps the pending login when only the password hash is rehashed at the password step', function () {
+    $user = tfEnforcedUser();
+    $user->forceFill(['password' => Hash::make('password', ['rounds' => 4])])->save();
+    $old = $user->password;
+
+    tfLogin();
+    expect($user->refresh()->password)->not->toBe($old);
+
+    tfVerify(tfLastCode())->assertRedirect(route('platform.main'));
+    $this->assertAuthenticatedAs($user);
+});
+
+it('does not keep the password hash in the session', function () {
+    $user = tfEnforcedUser();
+    tfLogin();
+
+    $session = json_encode(session()->all());
+    expect($session)->not->toContain($user->refresh()->getAuthPassword())
+        ->and($session)->not->toContain(json_encode($user->getAuthPassword()));
 });

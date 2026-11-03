@@ -36,3 +36,19 @@ it('logs a warning once in local/testing when platform.auth is false', function 
 
     expect($records)->toHaveCount(1);
 });
+
+it('does not register the code step routes when platform.auth is false', function () {
+    foreach (['challenge', 'verify', 'resend', 'cancel'] as $name) {
+        expect(Route::has('platform.two-factor.'.$name))->toBeFalse();
+    }
+
+    // Before 0.1.1 the code screen and "sign in as a different user" redirected to the missing
+    // login route and answered 500; now the URIs belong to nobody (Orchid's fallback answers).
+    foreach ([$this->get('/admin/two-factor'), $this->post('/admin/two-factor/cancel')] as $response) {
+        expect($response->status())->toBeGreaterThanOrEqual(400)->toBeLessThan(500);
+    }
+});
+
+it('keeps the profile routes when platform.auth is false', function () {
+    expect(Route::has('platform.profile.two-factor'))->toBeTrue();
+});

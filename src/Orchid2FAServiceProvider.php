@@ -110,11 +110,12 @@ class Orchid2FAServiceProvider extends ServiceProvider
     }
 
     /**
-     * The code step routes (spec §5.3). Registered also when Orchid's own login routes are disabled.
+     * The code step routes (spec §5.3). Not registered when Orchid's own login routes are disabled:
+     * nothing starts the code step then, and the screen redirects to Orchid's login route.
      */
     protected function registerChallengeRoutes(): void
     {
-        if ($this->app->routesAreCached()) {
+        if (! Orchid::loginRoutesEnabled() || $this->app->routesAreCached()) {
             return;
         }
 

@@ -19,6 +19,7 @@ return [
 
     'errors' => [
         'session_expired' => 'Your sign-in session has expired. Please sign in again.',
+        'password_changed' => 'Your password has been changed. Please sign in again.',
         'invalid_code' => 'The code is incorrect. Attempts left: :attempts.',
         'code_expired' => 'The code is no longer valid. Please request a new one.',
         'send_limit' => 'Too many codes have been requested. Please try again later (in :minutes min).',

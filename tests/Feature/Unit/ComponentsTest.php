@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Illuminate\Foundation\Auth\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\ServiceProvider;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
@@ -107,16 +108,18 @@ it('generates codes of the configured length with leading zeros', function () {
 
 it('keeps the pending login in the session', function () {
     $session = app('session')->driver();
-    $pending = new PendingLogin(5, true, now()->getTimestamp(), 'challenge');
+    $pending = new PendingLogin(5, true, now()->getTimestamp(), 'challenge', 'fingerprint');
 
     $pending->store($session);
 
     expect($session->get('orchid-2fa.pending'))->toBe([
         'user_id' => 5, 'remember' => true, 'created_at' => now()->getTimestamp(), 'challenge_id' => 'challenge',
+        'password_hash' => 'fingerprint',
     ])
         ->and(PendingLogin::fromSession($session))->toEqual($pending)
         ->and($pending->isExpired(600))->toBeFalse()
-        ->and($pending->withChallenge('other')->challengeId)->toBe('other');
+        ->and($pending->withChallenge('other')->challengeId)->toBe('other')
+        ->and($pending->withChallenge('other')->passwordHash)->toBe('fingerprint');
 
     $this->travel(600)->seconds();
     expect($pending->isExpired(600))->toBeTrue();
@@ -124,8 +127,27 @@ it('keeps the pending login in the session', function () {
     $session->put('orchid-2fa.pending', ['user_id' => 5]);
     expect(PendingLogin::fromSession($session))->toBeNull();
 
+    // A pending login of 0.1.0, without the password fingerprint, is not accepted.
+    $session->put('orchid-2fa.pending', [
+        'user_id' => 5, 'remember' => true, 'created_at' => now()->getTimestamp(), 'challenge_id' => 'challenge',
+    ]);
+    expect(PendingLogin::fromSession($session))->toBeNull();
+
     PendingLogin::forget($session);
     expect($session->has('orchid-2fa.pending'))->toBeFalse();
+});
+
+it('binds the pending login to the password without keeping the hash', function () {
+    $user = tfUser();
+    $pending = PendingLogin::for($user, false, 'challenge');
+
+    expect($pending->userId)->toBe($user->id)
+        ->and($pending->passwordHash)->toBe(hash_hmac('sha256', $user->password, (string) config('app.key')))
+        ->and($pending->passwordHash)->not->toBe($user->password)
+        ->and($pending->matchesPassword($user))->toBeTrue();
+
+    $user->forceFill(['password' => Hash::make('changed')])->save();
+    expect($pending->matchesPassword($user))->toBeFalse();
 });
 
 it('decides who needs 2FA', function () {

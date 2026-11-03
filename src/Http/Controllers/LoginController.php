@@ -70,6 +70,10 @@ class LoginController
         PendingLogin::forget($request->session());
 
         if (! $this->policy->requires($user)) {
+            // A remember cookie issued now did not pass the second factor: the next challenge
+            // has to rotate the remember token (spec §4.5).
+            $this->manager->forgetConfirmation($user);
+
             return $this->completeLogin($request, $user, $remember);
         }
 
@@ -122,41 +126,53 @@ class LoginController
         $request->session()->regenerate();
 
         $challengeId = $this->challenges->activeChallenge($user);
+        $error = null;
 
         if ($challengeId === null) {
             try {
                 $challengeId = $this->challenges->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN);
             } catch (SendLimitExceededException $e) {
-                $this->flashError($request, $this->sendLimitMessage($e->availableIn));
+                $error = $this->sendLimitMessage($e->availableIn);
             } catch (DeliveryFailedException) {
-                $this->flashError($request, $this->trans('errors.delivery_failed'));
+                $error = $this->trans('errors.delivery_failed');
             }
         }
 
+        if ($error !== null) {
+            $this->flashError($request, $error);
+        }
+
         // Without a sent code the pending login still lets the user resend within the limits (spec §4.10).
-        (new PendingLogin(
-            $user->getAuthIdentifier(),
-            $remember,
-            now()->getTimestamp(),
-            $challengeId ?? Str::random(40),
-        ))->store($request->session());
+        PendingLogin::for($user, $remember, $challengeId ?? Str::random(40))->store($request->session());
 
         $url = route(Orchid::challengeRoute());
 
-        return $request->wantsJson()
-            ? new JsonResponse(['two_factor' => true, 'redirect' => $url])
-            : redirect()->to($url);
+        if (! $request->wantsJson()) {
+            return redirect()->to($url);
+        }
+
+        // Still 200: the password is correct and the code step has started; the client goes on
+        // to the code step, where it can resend once `resend_available_in` is over (spec §4.2).
+        return new JsonResponse(['two_factor' => true, 'redirect' => $url] + ($error === null ? [] : [
+            'error' => $error,
+            'resend_available_in' => $this->challenges->sendAvailableIn($user),
+        ]));
     }
 
     /**
-     * An enforced user gets the record lazily, on the first challenge. Creating it rotates the
-     * remember token, so remember cookies issued before 2FA became required stop working (spec §4.5).
+     * An enforced user gets the record lazily, on the first challenge (spec §4.7).
+     *
+     * The remember token is rotated when the record is created or not confirmed (`confirmed_at`
+     * is null): remember cookies issued before the user had to pass the second factor (a new
+     * record, after disabling, an admin reset, an e-mail change or a sign-in without the second
+     * factor, which drops the confirmation) stop working. A confirmed user keeps the remember
+     * cookies issued after the code (spec §4.5).
      */
     protected function ensureRecord(Authenticatable $user): void
     {
         $record = TwoFactorAuthentication::query()->createOrFirst(['user_id' => $user->getAuthIdentifier()]);
 
-        if ($record->wasRecentlyCreated) {
+        if ($record->wasRecentlyCreated || $record->confirmed_at === null) {
             $this->manager->rotateRememberToken($user);
         }
     }

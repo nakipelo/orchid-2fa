@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Nakipelo\Orchid2FA\Console;
 
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Config\Repository;
 use Nakipelo\Orchid2FA\Support\Orchid;
 use Nakipelo\Orchid2FA\TwoFactorManager;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -20,7 +21,7 @@ class ResetTwoFactorCommand extends Command
      * @var string
      */
     protected $signature = 'orchid-2fa:reset
-        {email : The e-mail address the user signs in with}
+        {email : The e-mail address of the user (the attribute from orchid-2fa.channels.email.attribute)}
         {--force : Reset without asking for confirmation}';
 
     /**
@@ -28,10 +29,12 @@ class ResetTwoFactorCommand extends Command
      */
     protected $description = 'Reset two-factor authentication of a user: disable it, sign out of trusted devices, remove the active code and limits';
 
-    public function handle(TwoFactorManager $manager): int
+    public function handle(TwoFactorManager $manager, Repository $config): int
     {
         $email = (string) $this->argument('email');
-        $user = $email === '' ? null : Orchid::guard()->getProvider()->retrieveByCredentials(['email' => $email]);
+        $attribute = $config->get('orchid-2fa.channels.email.attribute');
+        $attribute = is_string($attribute) && $attribute !== '' ? $attribute : 'email';
+        $user = $email === '' ? null : Orchid::guard()->getProvider()->retrieveByCredentials([$attribute => $email]);
 
         if ($user === null) {
             $this->components->error(sprintf('No user with the e-mail address [%s].', $email));

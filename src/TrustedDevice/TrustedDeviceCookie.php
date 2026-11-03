@@ -112,8 +112,8 @@ class TrustedDeviceCookie
 
     protected function isValid(mixed $value, Authenticatable $user, ?TwoFactorAuthentication $record): bool
     {
-        // No record: no cookie was ever issued for this record. Not confirmed: the address
-        // changed after the cookie was issued, the next login confirms the new one (spec §4.9).
+        // No record: no cookie was ever issued for this record. Not confirmed: the address changed
+        // or the user signed in without the second factor after the cookie was issued (spec §4.5, §4.9).
         if ($record === null || ! $record->exists || $record->confirmed_at === null || ! is_string($value) || $value === '') {
             return false;
         }

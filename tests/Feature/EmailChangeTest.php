@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Queue;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
+use Nakipelo\Orchid2FA\Channels\EmailChannel;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
 use Nakipelo\Orchid2FA\Notifications\TwoFactorEmailChangedNotification;
 use Orchid\Support\Facades\Dashboard;
@@ -71,6 +72,24 @@ class CustomEmailChangedNotification extends BaseNotification
     public function toMail(mixed $notifiable): MailMessage
     {
         return (new MailMessage)->line('custom '.$this->maskedNewAddress);
+    }
+}
+
+/**
+ * The e-mail channel of an application (`channels.email.class`) that records the notices it sends.
+ */
+class RecordingEmailChannel extends EmailChannel
+{
+    /**
+     * @var list<string>
+     */
+    public static array $sent = [];
+
+    public function notify(string $address, BaseNotification $notification): void
+    {
+        self::$sent[] = $address;
+
+        parent::notify($address, $notification);
     }
 }
 
@@ -181,6 +200,17 @@ it('uses the configured notification class', function () {
             && $notification->maskedNewAddress === 'n***@example.org',
     );
     Notification::assertNotSentTo(new AnonymousNotifiable, TwoFactorEmailChangedNotification::class);
+});
+
+it('sends the notice through the configured e-mail channel class', function () {
+    config(['orchid-2fa.channels.email.class' => RecordingEmailChannel::class]);
+    RecordingEmailChannel::$sent = [];
+    $user = ecEnabledUser();
+
+    $user->forceFill(['email' => 'new@example.org'])->save();
+
+    expect(RecordingEmailChannel::$sent)->toBe(['old@example.com'])
+        ->and(ecNotices('old@example.com'))->toBe(['n***@example.org']);
 });
 
 it('queues the notice with notification.queue', function () {

@@ -2,12 +2,15 @@
 
 declare(strict_types=1);
 
+use Illuminate\Cache\RateLimiter;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Notifications\AnonymousNotifiable;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Testing\TestResponse;
+use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
+use Nakipelo\Orchid2FA\Challenge\CodeStore;
 use Nakipelo\Orchid2FA\Notifications\TwoFactorCodeNotification;
 use Nakipelo\Orchid2FA\Tests\TestCase;
 use Symfony\Component\Mime\Email;
@@ -86,6 +89,35 @@ function tfLastCode(?string $to = null): string
 function tfWrongCode(string $code): string
 {
     return $code === '000000' ? '111111' : '000000';
+}
+
+/**
+ * Make the next codes the given ones, in this order (then random again): tests that need two
+ * different codes do not depend on chance.
+ */
+function tfFixCodes(string ...$codes): void
+{
+    $queue = new ArrayObject($codes);
+
+    app()->bind(ChallengeManager::class, fn ($app) => new class($queue, $app, $app['config'], $app->make(CodeStore::class), $app->make(RateLimiter::class), $app['events'], $app['log']) extends ChallengeManager
+    {
+        /**
+         * @param  ArrayObject<int, string>  $queue
+         */
+        public function __construct(private readonly ArrayObject $queue, mixed ...$dependencies)
+        {
+            parent::__construct(...$dependencies);
+        }
+
+        protected function generateCode(): string
+        {
+            $codes = $this->queue->getArrayCopy();
+            $code = array_shift($codes);
+            $this->queue->exchangeArray($codes);
+
+            return $code ?? parent::generateCode();
+        }
+    });
 }
 
 /**

@@ -62,7 +62,7 @@ php artisan vendor:publish --tag=orchid-2fa-migrations    # database/migrations
 ```
 
 The migration is loaded from the package, so publish it only to change it (for example, a
-non-`bigint` `users.id`), and do it **before** `php artisan migrate`: the copy keeps the file name and
+non-`bigint` `users.id` or a user table other than `users`), and do it **before** `php artisan migrate`: the copy keeps the file name and
 replaces the package migration.
 
 **3. Add the `HasTwoFactor` trait to the user model.** Without it the login works, but a password
@@ -170,7 +170,13 @@ current address.
 
 Requests that want JSON get `200 {"two_factor": true, "redirect": "…"}` from the login, `204` on a
 successful code, `200 {"resend_available_in": N}` on resend and `422` with an error on `code`
-otherwise.
+otherwise. When the login could not send the code (send limit, delivery error), its response is
+still `200` — the password is correct and the code step has started — with two more fields:
+`{"two_factor": true, "redirect": "…", "error": "…", "resend_available_in": N}`.
+
+If the password changes while the code step is pending (for example, an administrator changes a
+compromised password), the code step ends: the user is sent back to the login form ("Your password
+has been changed. Please sign in again.").
 
 Limits: 6 digits, valid 10 minutes, 5 wrong entries per code (then the code is invalidated), one send
 per 60 seconds and 5 sends per hour per user (login, resend and profile sends together), plus a per-IP
@@ -247,7 +253,11 @@ All trusted devices of a user stop working when:
 - the user clicks "Sign out of all trusted devices" on the two-factor profile screen;
 - the password changes through the model (profile, user edit screen, password reset);
 - the user disables 2FA, or an administrator resets it;
-- the e-mail address changes — until the new address is confirmed by a code at the next sign-in.
+- the e-mail address changes: the next sign-in asks for a code to the new address and deletes the
+  trusted device cookie, so after confirming the new address the device has to be trusted again;
+- the user signs in without the second factor while it is not required (for example, the
+  `platform.2fa.required` permission was taken away for a while): the cookie is deleted the same way
+  at the first sign-in after 2FA is required again.
 
 With `trusted_devices.enabled = false` the checkbox is hidden and existing cookies are ignored (not
 deleted: they work again once the option is turned back on).
@@ -327,7 +337,7 @@ publish it with `--tag=orchid-2fa-views`.
 | Command | Description |
 |---|---|
 | `orchid-2fa:rotate-remember-tokens [--force]` | Clear `remember_token` of all users of the Orchid guard's model. Run once after installing. |
-| `orchid-2fa:reset {email} [--force]` | Reset 2FA of a user: disable the voluntary 2FA, sign out of all trusted devices, remove the active code, the attempt counter, the cooldown and the hourly limit. An enforced user gets a code to the current address at the next sign-in. Does not check Orchid permissions. |
+| `orchid-2fa:reset {email} [--force]` | Reset 2FA of a user: disable the voluntary 2FA, sign out of all trusted devices, rotate the remember token (remember-me cookies stop working), remove the active code, the attempt counter, the cooldown and the hourly limit. An enforced user gets a code to the current address at the next sign-in. The user is looked up by the address attribute (`channels.email.attribute`). Does not check Orchid permissions. |
 
 Both ask for confirmation unless `--force` is given, and exit with code 1 when declined (or when the
 e-mail is unknown).
@@ -349,8 +359,8 @@ e-mail is unknown).
   guard separate.
 - **`platform.auth = false`.** Orchid then registers no login routes and the package does not replace
   `POST login`: your own login must take care of the second factor. In `local` and `testing` the
-  package logs a warning once per boot; in other environments it is silent. The code step and
-  profile routes are still registered.
+  package logs a warning once per boot; in other environments it is silent. The profile routes are
+  still registered; the code step routes (`two-factor*`) are not.
 - **E-mail change without a password.** Orchid's `UserProfileScreen` changes the e-mail address
   without asking for the password. Someone with a stolen session can redirect the codes to their own
   address; the owner only gets the notice at the old address. Ask for the current password in the
@@ -388,6 +398,25 @@ e-mail is unknown).
 
 - **Recovery.** There are no backup codes and no self-service recovery: a user who lost the mailbox
   is restored by an administrator (fix the address, then "Reset 2FA" or `orchid-2fa:reset`).
+- **Active code reuse and send limits.** While a code is active (not expired, attempts left), a new
+  sign-in reuses it and sends no e-mail. Someone who knows the password can use up the attempts and
+  the hourly send limit and so keep the owner from signing in with a code until the limits expire
+  (up to an hour). The account is not locked, and the owner should change the password.
+- **Foreign key to `users.id`.** The migration references the `users` table. If the model of the
+  Orchid guard's provider uses another table (or a non-`bigint` key), publish the migration and fix it
+  before `php artisan migrate`.
+- **Codes in the queue.** With `notification.queue = true` the code is in plain text in the queued job
+  payload until the job is sent (the cache keeps only an HMAC). Protect the queue storage accordingly,
+  or keep the default synchronous sending.
+- **Impersonation.** Orchid's "Login as" (permission `platform.systems.users`) signs in as an enforced
+  user without that user's second factor. Grant the permission only to people you trust with that.
+- **Rotating `app.key`.** Codes are stored as an HMAC with the app key and trusted device cookies are
+  encrypted with it: a new `app.key` invalidates active codes and all trusted devices.
+- **Remember-me cookies after 2FA becomes required.** Once a user gets `platform.2fa.required` (or
+  `enforce_all` is turned on), the first password sign-in that starts the code step rotates the
+  remember token, so remember-me cookies issued without the second factor stop working. Until that
+  sign-in they still work: run `php artisan orchid-2fa:rotate-remember-tokens` for an immediate
+  effect. A reset by an administrator rotates the remember token too.
 - Only the e-mail channel in 0.1; TOTP, backup codes and other channels are not implemented.
 
 ## Security
@@ -400,8 +429,12 @@ e-mail is unknown).
   atomically, a new code invalidates the old one. 5 attempts × 5 codes per hour against 10⁶ values,
   plus a per-IP throttle.
 - Wrong passwords get exactly Orchid's response; send limits apply only after a correct password.
-- Remember-me cookies are issued only after the second factor; tokens are rotated when 2FA is enabled
-  and by `orchid-2fa:rotate-remember-tokens`.
+- Remember-me cookies are issued only after the second factor; tokens are rotated when 2FA is enabled,
+  when the code step starts for a user whose 2FA is not confirmed (a new record, after disabling, a
+  reset, an e-mail change or a sign-in without the second factor), on a reset by an administrator and
+  by `orchid-2fa:rotate-remember-tokens`.
+- The pending code step is bound to the password: it keeps an HMAC of the password hash (not the hash
+  itself) and ends when the password changes.
 - Disabling 2FA requires a code; enforced users cannot disable it (checked on the server).
 - Fail-closed when the code cannot be delivered.
 

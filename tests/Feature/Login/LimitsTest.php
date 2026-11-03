@@ -123,6 +123,30 @@ it('applies the send limits to a new login too', function () {
     $this->assertGuest();
 });
 
+it('reports the send limit to JSON clients of the password step', function () {
+    tfEnforcedUser();
+    tfLogin();
+    $code = tfLastCode();
+    foreach (range(1, 5) as $i) {
+        tfVerify(tfWrongCode($code));
+    }
+    $this->post(route('platform.two-factor.cancel'));
+    $this->travel(20)->seconds();
+
+    $this->postJson('/admin/login', ['email' => 'enforced@example.com', 'password' => 'password'])
+        ->assertOk()
+        ->assertExactJson([
+            'two_factor' => true,
+            'redirect' => route('platform.two-factor.challenge'),
+            'error' => 'Too many codes have been requested. Please try again later (in 1 min).',
+            'resend_available_in' => 40,
+        ]);
+
+    // The pending login is created as for a browser: the code screen shows the countdown.
+    $this->get(route('platform.two-factor.challenge'))->assertOk()->assertSee('data-available-in="40"', false);
+    $this->assertGuest();
+});
+
 it('does not count the sends of other users', function () {
     tfEnforcedUser('a@example.com');
     tfEnforcedUser('b@example.com');

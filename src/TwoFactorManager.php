@@ -66,12 +66,14 @@ class TwoFactorManager
 
     /**
      * Reset by an administrator (spec §4.8): as disabling, plus the active code and the
-     * counters are removed. An enforced user gets a code to the current address on the next login.
+     * counters are removed and the remember token is rotated, so the remember cookies of the
+     * user stop working. An enforced user gets a code to the current address on the next login.
      */
     public function reset(Authenticatable $user): void
     {
         $this->clearRecord($user);
         $this->challenges->clear($user);
+        $this->rotateRememberToken($user);
     }
 
     /**
@@ -115,23 +117,16 @@ class TwoFactorManager
     public function addressChanged(Authenticatable $user, string $oldAddress): void
     {
         $this->challenges->annul($user);
-
-        TwoFactorAuthentication::query()
-            ->where('user_id', $user->getAuthIdentifier())
-            ->whereNotNull('confirmed_at')
-            ->update(['confirmed_at' => null]);
+        $this->forgetConfirmation($user);
 
         if ($oldAddress === '' || ! $this->policy->requires($user)) {
             return;
         }
 
-        /** @var EmailChannel $email */
-        $email = $this->container->make(EmailChannel::class);
+        $email = $this->emailChannel();
 
         try {
-            $email->notify($oldAddress, $this->makeEmailChangedNotification(
-                EmailChannel::mask($email->destination($user)),
-            ));
+            $email->notify($oldAddress, $this->makeEmailChangedNotification($email->maskedDestination($user)));
         } catch (DeliveryFailedException $e) {
             $channel = $this->config->get('orchid-2fa.log.channel');
 
@@ -143,6 +138,19 @@ class TwoFactorManager
         }
     }
 
+    /**
+     * `confirmed_at = null` for an existing record: the next challenge rotates the remember token
+     * and confirms the address again; trusted device cookies are refused (and deleted) from now on
+     * (spec §4.5, §4.9, §5.6). Used after an e-mail change and after a sign-in without the second factor.
+     */
+    public function forgetConfirmation(Authenticatable $user): void
+    {
+        TwoFactorAuthentication::query()
+            ->where('user_id', $user->getAuthIdentifier())
+            ->whereNotNull('confirmed_at')
+            ->update(['confirmed_at' => null]);
+    }
+
     protected function clearRecord(Authenticatable $user): void
     {
         TwoFactorAuthentication::query()
@@ -150,6 +158,22 @@ class TwoFactorManager
             ->update(['enabled_at' => null, 'confirmed_at' => null]);
 
         $this->forgetTrustedDevices($user);
+    }
+
+    /**
+     * The e-mail channel of `channels.email.class`, the same class that sends the codes; the base
+     * EmailChannel if the configured class does not extend it (the notice is always an e-mail).
+     */
+    protected function emailChannel(): EmailChannel
+    {
+        $class = $this->config->get('orchid-2fa.channels.email.class');
+
+        /** @var EmailChannel $channel */
+        $channel = $this->container->make(
+            is_string($class) && is_a($class, EmailChannel::class, true) ? $class : EmailChannel::class,
+        );
+
+        return $channel;
     }
 
     protected function record(Authenticatable $user): TwoFactorAuthentication

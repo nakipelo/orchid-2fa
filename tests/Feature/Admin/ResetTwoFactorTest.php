@@ -6,6 +6,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
 use Nakipelo\Orchid2FA\Challenge\ChallengeManager;
 use Nakipelo\Orchid2FA\Models\TwoFactorAuthentication;
+use Nakipelo\Orchid2FA\Support\Orchid;
 use Nakipelo\Orchid2FA\TrustedDevice\TrustedDeviceCookie;
 use Orchid\Alert\Toast;
 use Orchid\Support\Facades\Dashboard;
@@ -40,11 +41,13 @@ function rsAdmin(bool $reset = true): User
 }
 
 /**
- * A voluntary user with a confirmed record, version 3, an active code and used send limits.
+ * A voluntary user with a confirmed record, version 3, an active code, used send limits and
+ * the remember token `old-token`.
  */
 function rsTarget(bool $enforced = false): User
 {
     $user = $enforced ? tfEnforcedUser('target@example.com') : tfUser('target@example.com');
+    $user->forceFill(['remember_token' => 'old-token'])->save();
     TwoFactorAuthentication::query()->create([
         'user_id' => $user->id,
         'enabled_at' => $enforced ? null : now(),
@@ -70,7 +73,8 @@ function rsAssertReset(User $user): void
         ->and($record->confirmed_at)->toBeNull()
         ->and($record->trusted_devices_version)->toBe(4)
         ->and(cache()->get('orchid-2fa:code:'.$user->id))->toBeNull()
-        ->and(app(ChallengeManager::class)->sendAvailableIn($user))->toBe(0);
+        ->and(app(ChallengeManager::class)->sendAvailableIn($user))->toBe(0)
+        ->and($user->refresh()->remember_token)->not->toBe('old-token');
 }
 
 function rsAssertUntouched(User $user): void
@@ -79,7 +83,8 @@ function rsAssertUntouched(User $user): void
 
     expect($record->confirmed_at)->not->toBeNull()
         ->and($record->trusted_devices_version)->toBe(3)
-        ->and(cache()->get('orchid-2fa:code:'.$user->id))->not->toBeNull();
+        ->and(cache()->get('orchid-2fa:code:'.$user->id))->not->toBeNull()
+        ->and($user->refresh()->remember_token)->toBe('old-token');
 }
 
 it('registers the reset permission in the package group', function () {
@@ -145,6 +150,20 @@ it('makes a trusted device of the user ask for the code after the reset', functi
     tfLogin('target@example.com')->assertRedirect(route('platform.two-factor.challenge'));
     $this->assertGuest();
     expect(tfLastCode('target@example.com'))->toBeString();
+});
+
+it('stops the remember cookies of the user after the reset', function () {
+    $target = rsTarget(enforced: true);
+    $recaller = Orchid::guard()->getRecallerName();
+    $cookie = $target->id.'|old-token|'.$target->password;
+
+    $this->withCookie($recaller, $cookie)->get(route('platform.profile'))->assertOk();
+    $this->newBrowser();
+
+    $this->artisan('orchid-2fa:reset', ['email' => 'target@example.com', '--force' => true])->assertSuccessful();
+
+    $this->withCookie($recaller, $cookie)->get(route('platform.profile'))->assertRedirect(route('platform.login'));
+    $this->assertGuest();
 });
 
 it('lets an enforced user get a code at once after the reset, despite the used limits', function () {
@@ -264,4 +283,16 @@ it('fails for an unknown e-mail address', function () {
         ->assertExitCode(1);
 
     rsAssertUntouched($target);
+});
+
+it('finds the user by the configured address attribute', function () {
+    $target = rsTarget();
+    $target->forceFill(['name' => 'backup@example.org'])->save();
+    config(['orchid-2fa.channels.email.attribute' => 'name']);
+
+    $this->artisan('orchid-2fa:reset', ['email' => 'backup@example.org', '--force' => true])
+        ->expectsOutputToContain('has been reset')
+        ->assertSuccessful();
+
+    rsAssertReset($target);
 });

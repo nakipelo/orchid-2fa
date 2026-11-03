@@ -49,17 +49,17 @@ class ChallengeController
 
     public function show(Request $request): View|RedirectResponse
     {
-        $pending = PendingLogin::fromSession($request->session());
-
-        if ($pending === null) {
+        if (PendingLogin::fromSession($request->session()) === null) {
             return redirect()->route(Orchid::loginRoute());
         }
 
-        $user = $this->pendingUser($request, $pending);
+        $resolved = $this->resolvePending($request);
 
-        if ($user === null) {
-            return $this->sessionExpiredRedirect();
+        if (is_string($resolved)) {
+            return $this->sessionExpiredRedirect($resolved);
         }
+
+        [, $user] = $resolved;
 
         $length = $this->challenges->codeLength();
 
@@ -84,12 +84,13 @@ class ChallengeController
      */
     public function verify(Request $request): Response
     {
-        $pending = PendingLogin::fromSession($request->session());
-        $user = $pending === null ? null : $this->pendingUser($request, $pending);
+        $resolved = $this->resolvePending($request);
 
-        if ($pending === null || $user === null) {
-            return $this->sessionExpired($request);
+        if (is_string($resolved)) {
+            return $this->sessionExpired($request, $resolved);
         }
+
+        [$pending, $user] = $resolved;
 
         $request->validate(['code' => 'required|string|max:64']);
 
@@ -126,12 +127,13 @@ class ChallengeController
      */
     public function resend(Request $request): Response
     {
-        $pending = PendingLogin::fromSession($request->session());
-        $user = $pending === null ? null : $this->pendingUser($request, $pending);
+        $resolved = $this->resolvePending($request);
 
-        if ($pending === null || $user === null) {
-            return $this->sessionExpired($request);
+        if (is_string($resolved)) {
+            return $this->sessionExpired($request, $resolved);
         }
+
+        [$pending, $user] = $resolved;
 
         try {
             $challengeId = $this->challenges->issue($user, TwoFactorChallengeSent::CONTEXT_LOGIN);
@@ -165,42 +167,56 @@ class ChallengeController
     }
 
     /**
-     * The user of a valid pending login; an expired pending login is removed.
+     * The valid pending login and its user, or the message key why there is none. A pending login
+     * that expired, whose user is gone or whose password changed since the password step
+     * (spec §4.2) is removed.
+     *
+     * @return array{0: PendingLogin, 1: Authenticatable}|string
      */
-    protected function pendingUser(Request $request, PendingLogin $pending): ?Authenticatable
+    protected function resolvePending(Request $request): array|string
     {
-        if ($pending->isExpired($this->pendingTtl())) {
-            PendingLogin::forget($request->session());
+        $pending = PendingLogin::fromSession($request->session());
 
-            return null;
+        if ($pending === null) {
+            return 'errors.session_expired';
         }
 
-        $user = Orchid::guard()->getProvider()->retrieveById($pending->userId);
+        $user = $pending->isExpired($this->pendingTtl())
+            ? null
+            : Orchid::guard()->getProvider()->retrieveById($pending->userId);
 
         if ($user === null) {
             PendingLogin::forget($request->session());
+
+            return 'errors.session_expired';
         }
 
-        return $user;
+        if (! $pending->matchesPassword($user)) {
+            PendingLogin::forget($request->session());
+
+            return 'errors.password_changed';
+        }
+
+        return [$pending, $user];
     }
 
     /**
      * @throws ValidationException
      */
-    protected function sessionExpired(Request $request): Response
+    protected function sessionExpired(Request $request, string $message = 'errors.session_expired'): Response
     {
         if ($request->wantsJson()) {
-            throw ValidationException::withMessages(['code' => $this->trans('errors.session_expired')]);
+            throw ValidationException::withMessages(['code' => $this->trans($message)]);
         }
 
-        return $this->sessionExpiredRedirect();
+        return $this->sessionExpiredRedirect($message);
     }
 
-    protected function sessionExpiredRedirect(): RedirectResponse
+    protected function sessionExpiredRedirect(string $message = 'errors.session_expired'): RedirectResponse
     {
         return redirect()
             ->route(Orchid::loginRoute())
-            ->withErrors(['email' => $this->trans('errors.session_expired')]);
+            ->withErrors(['email' => $this->trans($message)]);
     }
 
     /**

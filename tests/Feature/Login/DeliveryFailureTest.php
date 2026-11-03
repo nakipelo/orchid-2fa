@@ -67,6 +67,23 @@ it('keeps the user out when the code cannot be sent', function () {
     $this->get(route('platform.main'))->assertRedirect(route('platform.login'));
 });
 
+it('reports a failed send to JSON clients of the password step', function () {
+    $this->freezeTime();
+    tfEnforcedUser();
+
+    $this->postJson('/admin/login', ['email' => 'enforced@example.com', 'password' => 'password'])
+        ->assertOk()
+        ->assertExactJson([
+            'two_factor' => true,
+            'redirect' => route('platform.two-factor.challenge'),
+            'error' => 'We could not send the code. Please try again later.',
+            'resend_available_in' => 60,
+        ]);
+
+    $this->assertGuest();
+    expect(PendingLogin::fromSession(session()->driver()))->not->toBeNull();
+});
+
 it('lets the user resend after a failed send, within the limits', function () {
     $user = tfEnforcedUser();
     tfLogin();
